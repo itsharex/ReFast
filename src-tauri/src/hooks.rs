@@ -10,8 +10,8 @@ pub mod windows {
         WM_RBUTTONDOWN, WM_RBUTTONUP,
     };
 
-    static MOUSE_HOOK: std::sync::OnceLock<HHOOK> = std::sync::OnceLock::new();
-    static KEYBOARD_HOOK: std::sync::OnceLock<HHOOK> = std::sync::OnceLock::new();
+    static MOUSE_HOOK: std::sync::Mutex<Option<HHOOK>> = std::sync::Mutex::new(None);
+    static KEYBOARD_HOOK: std::sync::Mutex<Option<HHOOK>> = std::sync::Mutex::new(None);
     static RECORDING_STATE: std::sync::OnceLock<Arc<Mutex<crate::recording::RecordingState>>> = std::sync::OnceLock::new();
 
     unsafe extern "system" fn mouse_hook_proc(
@@ -84,7 +84,8 @@ pub mod windows {
             }
         }
 
-        CallNextHookEx(*MOUSE_HOOK.get().unwrap_or(&0), n_code, w_param, l_param)
+        let hook = MOUSE_HOOK.lock().ok().and_then(|h| *h).unwrap_or(0);
+        CallNextHookEx(hook, n_code, w_param, l_param)
     }
 
     unsafe extern "system" fn keyboard_hook_proc(
@@ -105,7 +106,8 @@ pub mod windows {
                         let vk_code = if !hook_struct.is_null() {
                             (*hook_struct).vkCode as u32
                         } else {
-                            return CallNextHookEx(*KEYBOARD_HOOK.get().unwrap_or(&0), n_code, w_param, l_param);
+                            let hook = KEYBOARD_HOOK.lock().ok().and_then(|h| *h).unwrap_or(0);
+                            return CallNextHookEx(hook, n_code, w_param, l_param);
                         };
 
                         let event_type = match w_param as u32 {
@@ -127,15 +129,19 @@ pub mod windows {
             }
         }
 
-        CallNextHookEx(*KEYBOARD_HOOK.get().unwrap_or(&0), n_code, w_param, l_param)
+        let hook = KEYBOARD_HOOK.lock().ok().and_then(|h| *h).unwrap_or(0);
+        CallNextHookEx(hook, n_code, w_param, l_param)
     }
 
     pub fn install_hooks(state: Arc<Mutex<crate::recording::RecordingState>>) -> Result<(), String> {
-        RECORDING_STATE
-            .set(state)
-            .map_err(|_| "Failed to set recording state".to_string())?;
+        // Set the recording state if not already set
+        RECORDING_STATE.set(state).ok();
 
         unsafe {
+            // Uninstall existing hooks if any before installing new ones
+            uninstall_hooks().ok(); // Ignore errors during uninstall
+
+            // Install new hooks
             let mouse_hook = SetWindowsHookExA(
                 WH_MOUSE_LL,
                 Some(mouse_hook_proc),
@@ -147,9 +153,8 @@ pub mod windows {
                 return Err("Failed to install mouse hook".to_string());
             }
 
-            MOUSE_HOOK
-                .set(mouse_hook)
-                .map_err(|_| "Mouse hook already installed".to_string())?;
+            // Store the hook handle
+            *MOUSE_HOOK.lock().map_err(|e| format!("Failed to lock mouse hook: {}", e))? = Some(mouse_hook);
 
             let keyboard_hook = SetWindowsHookExA(
                 WH_KEYBOARD_LL,
@@ -160,12 +165,12 @@ pub mod windows {
 
             if keyboard_hook == 0 {
                 UnhookWindowsHookEx(mouse_hook);
+                *MOUSE_HOOK.lock().unwrap() = None;
                 return Err("Failed to install keyboard hook".to_string());
             }
 
-            KEYBOARD_HOOK
-                .set(keyboard_hook)
-                .map_err(|_| "Keyboard hook already installed".to_string())?;
+            // Store the hook handle
+            *KEYBOARD_HOOK.lock().map_err(|e| format!("Failed to lock keyboard hook: {}", e))? = Some(keyboard_hook);
         }
 
         Ok(())
@@ -173,15 +178,19 @@ pub mod windows {
 
     pub fn uninstall_hooks() -> Result<(), String> {
         unsafe {
-            if let Some(mouse_hook) = MOUSE_HOOK.get() {
-                if *mouse_hook != 0 {
-                    UnhookWindowsHookEx(*mouse_hook);
+            if let Ok(mut mouse_hook_guard) = MOUSE_HOOK.lock() {
+                if let Some(hook) = mouse_hook_guard.take() {
+                    if hook != 0 {
+                        UnhookWindowsHookEx(hook);
+                    }
                 }
             }
 
-            if let Some(keyboard_hook) = KEYBOARD_HOOK.get() {
-                if *keyboard_hook != 0 {
-                    UnhookWindowsHookEx(*keyboard_hook);
+            if let Ok(mut keyboard_hook_guard) = KEYBOARD_HOOK.lock() {
+                if let Some(hook) = keyboard_hook_guard.take() {
+                    if hook != 0 {
+                        UnhookWindowsHookEx(hook);
+                    }
                 }
             }
         }

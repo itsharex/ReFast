@@ -51,26 +51,22 @@ pub fn start_recording() -> Result<(), String> {
     let mut state_guard = state.lock().map_err(|e| e.to_string())?;
     
     if state_guard.is_recording {
-        // If already recording, try to stop and clean up first
+        // If already recording, stop and clean up first
         state_guard.stop();
         drop(state_guard);
         hooks::windows::uninstall_hooks().ok(); // Try to uninstall hooks, ignore errors
-        // Try again
-        let mut state_guard = state.lock().map_err(|e| e.to_string())?;
-        if state_guard.is_recording {
-            return Err("Already recording".to_string());
-        }
-        state_guard.start();
-        drop(state_guard);
-        hooks::windows::install_hooks(state)?;
-        return Ok(());
+        // Wait a bit for hooks to fully uninstall
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Get state again after cleanup
+        state_guard = state.lock().map_err(|e| e.to_string())?;
     }
 
+    // Start fresh recording
     state_guard.start();
     drop(state_guard);
     
-    // Install Windows hooks with shared state
-    hooks::windows::install_hooks(state)?;
+    // Install Windows hooks with shared state (clone Arc to avoid move)
+    hooks::windows::install_hooks(state.clone())?;
     
     Ok(())
 }
