@@ -483,3 +483,11 @@ pub fn toggle_launcher(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn hide_launcher(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("launcher") {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+

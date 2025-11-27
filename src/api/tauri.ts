@@ -53,5 +53,9 @@ export const tauriApi = {
   async toggleLauncher(): Promise<void> {
     return invoke("toggle_launcher");
   },
+
+  async hideLauncher(): Promise<void> {
+    return invoke("hide_launcher");
+  },
 };
 

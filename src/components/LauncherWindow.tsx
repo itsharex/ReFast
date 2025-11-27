@@ -19,6 +19,24 @@ export function LauncherWindow() {
     // Ensure window has no decorations
     window.setDecorations(false).catch(console.error);
     
+    // Global keyboard listener for Escape key
+    const handleGlobalKeyDown = async (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+          await tauriApi.hideLauncher();
+          setQuery("");
+          setSelectedIndex(0);
+        } catch (error) {
+          console.error("Failed to hide window:", error);
+        }
+      }
+    };
+    
+    // Use document with capture phase to catch Esc key early
+    document.addEventListener("keydown", handleGlobalKeyDown, true);
+    
     const unlisten = window.onFocusChanged(({ payload: focused }) => {
       if (focused && inputRef.current) {
         setTimeout(() => {
@@ -33,6 +51,7 @@ export function LauncherWindow() {
     }, 100);
 
     return () => {
+      document.removeEventListener("keydown", handleGlobalKeyDown, true);
       unlisten.then((fn) => fn());
     };
   }, []);
@@ -107,8 +126,7 @@ export function LauncherWindow() {
     try {
       await tauriApi.launchApplication(app);
       // Hide launcher window after launch
-      const window = getCurrentWindow();
-      await window.hide();
+      await tauriApi.hideLauncher();
       setQuery("");
       setSelectedIndex(0);
     } catch (error) {
@@ -117,11 +135,16 @@ export function LauncherWindow() {
   };
 
   const handleKeyDown = async (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      const window = getCurrentWindow();
-      await window.hide();
-      setQuery("");
-      setSelectedIndex(0);
+    if (e.key === "Escape" || e.keyCode === 27) {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        await tauriApi.hideLauncher();
+        setQuery("");
+        setSelectedIndex(0);
+      } catch (error) {
+        console.error("Failed to hide window:", error);
+      }
       return;
     }
 
@@ -149,7 +172,23 @@ export function LauncherWindow() {
   };
 
   return (
-    <div className="flex flex-col h-full items-center justify-center bg-transparent">
+    <div 
+      className="flex flex-col h-full items-center justify-center bg-transparent"
+      tabIndex={-1}
+      onKeyDown={async (e) => {
+        if (e.key === "Escape" || e.keyCode === 27) {
+          e.preventDefault();
+          e.stopPropagation();
+          try {
+            await tauriApi.hideLauncher();
+            setQuery("");
+            setSelectedIndex(0);
+          } catch (error) {
+            console.error("Failed to hide window:", error);
+          }
+        }
+      }}
+    >
       {/* Main Search Container - utools style */}
       <div className="w-full max-w-2xl mx-auto px-4">
         <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden">

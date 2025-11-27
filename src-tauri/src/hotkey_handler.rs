@@ -19,7 +19,9 @@ pub mod windows {
     const MOD_ALT: u32 = 0x0001;
 
     const HOTKEY_ID_ALT_SPACE: i32 = 1;
+    const HOTKEY_ID_ESC: i32 = 2;
     const VK_SPACE: u32 = 0x20;
+    const VK_ESCAPE: u32 = 0x1B;
 
     pub fn start_hotkey_listener(
         sender: mpsc::Sender<()>,

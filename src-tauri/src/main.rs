@@ -77,6 +77,7 @@ fn main() {
             search_applications,
             launch_application,
             toggle_launcher,
+            hide_launcher,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
