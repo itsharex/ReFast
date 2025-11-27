@@ -11,6 +11,7 @@ function App() {
   const [message, setMessage] = useState<string>("");
   const [progress, setProgress] = useState<number>(0);
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
+  const [selectedRecordingPath, setSelectedRecordingPath] = useState<string>("");
 
   useEffect(() => {
     loadRecordings();
@@ -74,8 +75,8 @@ function App() {
   };
 
   const handleSelectRecording = (recording: RecordingMeta) => {
-    // Could be used to auto-select in playback controls
-    console.log("Selected recording:", recording);
+    // Auto-select in playback controls
+    setSelectedRecordingPath(recording.file_path);
   };
 
   return (
@@ -94,6 +95,8 @@ function App() {
           <PlaybackControls
             isPlaying={status === "playing"}
             recordings={recordings}
+            selectedPath={selectedRecordingPath}
+            onSelectPath={setSelectedRecordingPath}
             onPlay={handlePlayRecording}
             onStop={handleStopPlayback}
           />

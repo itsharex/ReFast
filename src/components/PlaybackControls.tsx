@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface PlaybackControlsProps {
   isPlaying: boolean;
   recordings: Array<{ file_path: string; file_name: string }>;
+  selectedPath?: string;
+  onSelectPath?: (path: string) => void;
   onPlay: (path: string, speed: number) => void;
   onStop: () => void;
 }
@@ -10,11 +12,23 @@ interface PlaybackControlsProps {
 export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
   isPlaying,
   recordings,
+  selectedPath: externalSelectedPath = "",
+  onSelectPath,
   onPlay,
   onStop,
 }) => {
-  const [selectedPath, setSelectedPath] = useState<string>("");
+  const [selectedPath, setSelectedPath] = useState<string>(externalSelectedPath);
   const [speed, setSpeed] = useState<number>(1.0);
+
+  // Sync external selectedPath with internal state
+  useEffect(() => {
+    setSelectedPath(externalSelectedPath);
+  }, [externalSelectedPath]);
+
+  const handlePathChange = (path: string) => {
+    setSelectedPath(path);
+    onSelectPath?.(path);
+  };
 
   const handlePlay = () => {
     if (selectedPath) {
@@ -28,7 +42,7 @@ export const PlaybackControls: React.FC<PlaybackControlsProps> = ({
       <div className="flex flex-col gap-2">
         <select
           value={selectedPath}
-          onChange={(e) => setSelectedPath(e.target.value)}
+          onChange={(e) => handlePathChange(e.target.value)}
           disabled={isPlaying}
           className="px-3 py-2 border border-gray-300 rounded disabled:bg-gray-100"
         >
