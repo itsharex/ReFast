@@ -185,7 +185,7 @@ fn extract_recording_meta(file_path: &Path, recordings_dir: &Path) -> Result<Rec
 }
 
 #[tauri::command]
-pub fn play_recording(path: String, speed: f32) -> Result<(), String> {
+pub fn play_recording(app: tauri::AppHandle, path: String, speed: f32) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         return Err("Replay is only supported on Windows".to_string());
@@ -197,7 +197,20 @@ pub fn play_recording(path: String, speed: f32) -> Result<(), String> {
         return Err("Already playing".to_string());
     }
 
-    state.load_recording(&path)?;
+    // Convert relative path to absolute path
+    let app_data_dir = get_app_data_dir(&app)?;
+    let recordings_dir = app_data_dir.join("recordings");
+    
+    // Remove "recordings/" prefix if present
+    let file_path = if path.starts_with("recordings/") {
+        let filename = path.strip_prefix("recordings/")
+            .ok_or_else(|| format!("Invalid path format: {}", path))?;
+        recordings_dir.join(filename)
+    } else {
+        recordings_dir.join(&path)
+    };
+    
+    state.load_recording(&file_path)?;
     state.start(speed);
     
     // TODO: Start replay task here

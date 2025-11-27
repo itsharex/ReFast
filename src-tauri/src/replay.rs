@@ -22,8 +22,20 @@ impl ReplayState {
 
     pub fn load_recording<P: AsRef<Path>>(&mut self, path: P) -> Result<(), String> {
         let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
-        self.current_events = serde_json::from_str(&content)
+        
+        // Parse JSON - the file contains {events: [...], duration_ms: ..., created_at: ...}
+        let json: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        
+        // Extract events array
+        self.current_events = json["events"]
+            .as_array()
+            .ok_or_else(|| "Missing or invalid 'events' field in recording file".to_string())?
+            .iter()
+            .map(|v| serde_json::from_value(v.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to parse events: {}", e))?;
+        
         self.current_index = 0;
         Ok(())
     }
