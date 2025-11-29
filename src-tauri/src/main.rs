@@ -4,6 +4,7 @@
 mod app_search;
 mod commands;
 mod error;
+mod everything_search;
 mod file_history;
 mod hooks;
 mod hotkey;
@@ -183,6 +184,11 @@ fn main() {
             hide_launcher,
             add_file_to_history,
             search_file_history,
+            search_everything,
+            is_everything_available,
+            get_everything_path,
+            open_everything_download,
+            download_everything,
             launch_file,
             check_path_exists,
             get_clipboard_file_path,

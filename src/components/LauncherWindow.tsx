@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { tauriApi } from "../api/tauri";
-import type { AppInfo, FileHistoryItem } from "../types";
+import type { AppInfo, FileHistoryItem, EverythingResult } from "../types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 
 type SearchResult = {
-  type: "app" | "file";
+  type: "app" | "file" | "everything";
   app?: AppInfo;
   file?: FileHistoryItem;
+  everything?: EverythingResult;
   displayName: string;
   path: string;
 };
@@ -16,13 +18,110 @@ export function LauncherWindow() {
   const [query, setQuery] = useState("");
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [filteredApps, setFilteredApps] = useState<AppInfo[]>([]);
-  const [fileHistory, setFileHistory] = useState<FileHistoryItem[]>([]);
   const [filteredFiles, setFilteredFiles] = useState<FileHistoryItem[]>([]);
+  const [everythingResults, setEverythingResults] = useState<EverythingResult[]>([]);
+  const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
+  const [everythingPath, setEverythingPath] = useState<string | null>(null);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadedPath, setDownloadedPath] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // Check if Everything is available on mount
+  useEffect(() => {
+    const checkEverything = async () => {
+      try {
+        const available = await tauriApi.isEverythingAvailable();
+        setIsEverythingAvailable(available);
+        
+        // Get Everything path for debugging
+        if (available) {
+          try {
+            const path = await tauriApi.getEverythingPath();
+            setEverythingPath(path);
+            if (path) {
+              console.log("Everything found at:", path);
+            }
+          } catch (error) {
+            console.error("Failed to get Everything path:", error);
+          }
+        } else {
+          console.warn("Everything is not available. Please install Everything or add es.exe to PATH.");
+          setEverythingPath(null);
+        }
+      } catch (error) {
+        console.error("Failed to check Everything availability:", error);
+        setIsEverythingAvailable(false);
+        setEverythingPath(null);
+      }
+    };
+    checkEverything();
+  }, []);
+
+  // Listen for download progress events
+  useEffect(() => {
+    if (!isDownloading) return;
+
+    let unlistenFn: (() => void) | null = null;
+    
+    const setupProgressListener = async () => {
+      const unlisten = await listen<number>("everything-download-progress", (event) => {
+        setDownloadProgress(event.payload);
+      });
+      unlistenFn = unlisten;
+    };
+
+    setupProgressListener();
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [isDownloading]);
+
+  // Adjust window size when download modal is shown
+  useEffect(() => {
+    if (!showDownloadModal) return;
+
+    const adjustWindowForModal = () => {
+      const window = getCurrentWindow();
+      
+      // Get the main container width to maintain consistent width
+      const whiteContainer = document.querySelector('.bg-white');
+      const containerWidth = whiteContainer ? whiteContainer.scrollWidth : 600;
+      // Limit max width to prevent window from being too wide
+      const maxWidth = 600;
+      const targetWidth = Math.min(containerWidth, maxWidth);
+      
+      // Find the modal element and calculate its actual height
+      const modalElement = document.querySelector('[class*="bg-white"][class*="rounded-lg"][class*="shadow-xl"]');
+      if (modalElement) {
+        const modalRect = modalElement.getBoundingClientRect();
+        const modalHeight = modalRect.height;
+        // Add padding for margins (my-4 = 16px top + 16px bottom = 32px)
+        const requiredHeight = modalHeight + 32;
+        
+        window.setSize(new LogicalSize(targetWidth, requiredHeight)).catch(console.error);
+      } else {
+        // Fallback: use estimated height
+        const estimatedHeight = 450;
+        window.setSize(new LogicalSize(targetWidth, estimatedHeight)).catch(console.error);
+      }
+    };
+
+    // Wait for modal to render, use double requestAnimationFrame for accurate measurement
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(adjustWindowForModal, 50);
+      });
+    });
+  }, [showDownloadModal, isDownloading, downloadedPath]);
 
   // Focus input when window becomes visible and adjust window size
   useEffect(() => {
@@ -38,8 +137,11 @@ export function LauncherWindow() {
         // Use scrollHeight to get the full content height including overflow
         const containerWidth = whiteContainer.scrollWidth;
         const containerHeight = whiteContainer.scrollHeight;
+        // Limit max width to prevent window from being too wide
+        const maxWidth = 600;
+        const targetWidth = Math.min(containerWidth, maxWidth);
         // Use setSize to match content area exactly (decorations are disabled)
-        window.setSize(new LogicalSize(containerWidth, containerHeight)).catch(console.error);
+        window.setSize(new LogicalSize(targetWidth, containerHeight)).catch(console.error);
       }
     };
     
@@ -116,11 +218,12 @@ export function LauncherWindow() {
     };
   }, []);
 
-  // Search applications and file history when query changes (with debounce)
+  // Search applications, file history, and Everything when query changes (with debounce)
   useEffect(() => {
     if (query.trim() === "") {
       setFilteredApps([]);
       setFilteredFiles([]);
+      setEverythingResults([]);
       setResults([]);
       setSelectedIndex(0);
       return;
@@ -130,13 +233,16 @@ export function LauncherWindow() {
     const timeoutId = setTimeout(() => {
       searchApplications(query);
       searchFileHistory(query);
+      if (isEverythingAvailable) {
+        searchEverything(query);
+      }
     }, 500); // 500ms debounce
     
     return () => clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, isEverythingAvailable]);
 
-  // Combine apps and files into results when they change
+  // Combine apps, files, and Everything results into results when they change
   useEffect(() => {
     const combinedResults: SearchResult[] = [
       ...filteredApps.map((app) => ({
@@ -151,6 +257,12 @@ export function LauncherWindow() {
         displayName: file.name,
         path: file.path,
       })),
+      ...everythingResults.map((everything) => ({
+        type: "everything" as const,
+        everything,
+        displayName: everything.name,
+        path: everything.path,
+      })),
     ];
     setResults(combinedResults.slice(0, 10)); // Limit to 10 results
     setSelectedIndex(0);
@@ -159,15 +271,18 @@ export function LauncherWindow() {
     const adjustWindowSize = () => {
       const window = getCurrentWindow();
       const whiteContainer = document.querySelector('.bg-white');
-      if (whiteContainer) {
+      if (whiteContainer && !showDownloadModal) {
         // Use double requestAnimationFrame to ensure DOM is fully updated
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             // Use scrollWidth/scrollHeight to get the full content size
             const containerWidth = whiteContainer.scrollWidth;
             const containerHeight = whiteContainer.scrollHeight;
+            // Limit max width to prevent window from being too wide
+            const maxWidth = 600;
+            const targetWidth = Math.min(containerWidth, maxWidth);
             // Use setSize to match content area exactly (decorations are disabled)
-            window.setSize(new LogicalSize(containerWidth, containerHeight)).catch(console.error);
+            window.setSize(new LogicalSize(targetWidth, containerHeight)).catch(console.error);
           });
         });
       }
@@ -175,22 +290,25 @@ export function LauncherWindow() {
     
     // Adjust size after results update - use longer delay to ensure DOM is ready
     setTimeout(adjustWindowSize, 200);
-  }, [filteredApps, filteredFiles]);
+  }, [filteredApps, filteredFiles, everythingResults]);
 
     // Adjust window size when results actually change
     useEffect(() => {
       const adjustWindowSize = () => {
         const window = getCurrentWindow();
         const whiteContainer = document.querySelector('.bg-white');
-        if (whiteContainer) {
+        if (whiteContainer && !showDownloadModal) {
           // Use double requestAnimationFrame to ensure DOM is fully updated
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               const containerRect = whiteContainer.getBoundingClientRect();
               const containerWidth = containerRect.width;
               const containerHeight = containerRect.height;
+              // Limit max width to prevent window from being too wide
+              const maxWidth = 600;
+              const targetWidth = Math.min(containerWidth, maxWidth);
               // Use setSize to match content area exactly (decorations are disabled)
-              window.setSize(new LogicalSize(containerWidth, containerHeight)).catch(console.error);
+              window.setSize(new LogicalSize(targetWidth, containerHeight)).catch(console.error);
             });
           });
         }
@@ -198,7 +316,7 @@ export function LauncherWindow() {
       
       // Adjust size after results state updates
       setTimeout(adjustWindowSize, 250);
-    }, [results]);
+    }, [results, showDownloadModal]);
 
   // Scroll selected item into view and adjust window size
   useEffect(() => {
@@ -216,15 +334,18 @@ export function LauncherWindow() {
     const adjustWindowSize = () => {
       const window = getCurrentWindow();
       const whiteContainer = document.querySelector('.bg-white');
-      if (whiteContainer) {
+      if (whiteContainer && !showDownloadModal) {
         // Use double requestAnimationFrame to ensure DOM is fully updated
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             // Use scrollWidth/scrollHeight to get the full content size
             const containerWidth = whiteContainer.scrollWidth;
             const containerHeight = whiteContainer.scrollHeight;
+            // Limit max width to prevent window from being too wide
+            const maxWidth = 600;
+            const targetWidth = Math.min(containerWidth, maxWidth);
             // Use setSize to match content area exactly (decorations are disabled)
-            window.setSize(new LogicalSize(containerWidth, containerHeight)).catch(console.error);
+            window.setSize(new LogicalSize(targetWidth, containerHeight)).catch(console.error);
           });
         });
       }
@@ -232,7 +353,7 @@ export function LauncherWindow() {
     
     // Adjust size after scroll animation
     setTimeout(adjustWindowSize, 200);
-  }, [selectedIndex, results.length, results]);
+  }, [selectedIndex, results.length, results, showDownloadModal]);
 
   const loadApplications = async () => {
     try {
@@ -284,12 +405,99 @@ export function LauncherWindow() {
     }
   };
 
+  const searchEverything = async (searchQuery: string) => {
+    try {
+      const results = await tauriApi.searchEverything(searchQuery);
+      setEverythingResults(results);
+    } catch (error) {
+      console.error("Failed to search Everything:", error);
+      setEverythingResults([]);
+    }
+  };
+
+  const handleDownloadEverything = async () => {
+    try {
+      setIsDownloading(true);
+      setDownloadProgress(0);
+      setDownloadedPath(null);
+      setShowDownloadModal(true); // 显示下载进度模态框
+      
+      const path = await tauriApi.downloadEverything();
+      setDownloadedPath(path);
+      setDownloadProgress(100);
+      setIsDownloading(false);
+      // 下载完成后，模态框会显示下载完成的内容
+    } catch (error) {
+      console.error("Failed to download Everything:", error);
+      setIsDownloading(false);
+      setDownloadProgress(0);
+      setShowDownloadModal(false);
+      alert(`下载失败: ${error}`);
+    }
+  };
+
+  const handleCloseDownloadModal = () => {
+    setShowDownloadModal(false);
+  };
+
+  const handleCheckAgain = async () => {
+    try {
+      const available = await tauriApi.isEverythingAvailable();
+      setIsEverythingAvailable(available);
+      
+      if (available) {
+        const path = await tauriApi.getEverythingPath();
+        setEverythingPath(path);
+        setShowDownloadModal(false);
+        if (path) {
+          console.log("Everything found at:", path);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check Everything:", error);
+    }
+  };
+
+  const handleOpenInstaller = async () => {
+    if (downloadedPath) {
+      try {
+        // Hide launcher window first to ensure installer window is visible
+        await tauriApi.hideLauncher();
+        setShowDownloadModal(false);
+        
+        // Small delay to ensure window is hidden before launching installer
+        setTimeout(async () => {
+          try {
+            await tauriApi.launchFile(downloadedPath);
+          } catch (error) {
+            console.error("Failed to open installer:", error);
+            alert(`无法打开安装程序: ${error}`);
+          }
+        }, 100);
+      } catch (error) {
+        console.error("Failed to hide launcher:", error);
+        // Still try to launch installer even if hiding fails
+        try {
+          await tauriApi.launchFile(downloadedPath);
+          setShowDownloadModal(false);
+        } catch (launchError) {
+          console.error("Failed to open installer:", launchError);
+          alert(`无法打开安装程序: ${launchError}`);
+        }
+      }
+    }
+  };
+
   const handleLaunch = async (result: SearchResult) => {
     try {
       if (result.type === "app" && result.app) {
         await tauriApi.launchApplication(result.app);
       } else if (result.type === "file" && result.file) {
         await tauriApi.launchFile(result.file.path);
+      } else if (result.type === "everything" && result.everything) {
+        // Launch Everything result and add to file history
+        await tauriApi.launchFile(result.everything.path);
+        await tauriApi.addFileToHistory(result.everything.path);
       }
       // Hide launcher window after launch
       await tauriApi.hideLauncher();
@@ -610,7 +818,7 @@ export function LauncherWindow() {
                             }
                           }}
                         />
-                      ) : result.type === "file" ? (
+                      ) : result.type === "file" || result.type === "everything" ? (
                         <svg
                           className={`w-5 h-5 ${
                             index === selectedIndex ? "text-white" : "text-gray-500"
@@ -692,14 +900,126 @@ export function LauncherWindow() {
           )}
 
           {/* Footer */}
-          {results.length > 0 && (
-            <div className="px-6 py-2 border-t border-gray-100 text-xs text-gray-400 flex justify-between bg-gray-50/50">
-              <span>{results.length} 个结果</span>
-              <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
+          <div className="px-6 py-2 border-t border-gray-100 text-xs text-gray-400 flex justify-between items-center bg-gray-50/50">
+            <div className="flex items-center gap-3">
+              {results.length > 0 && <span>{results.length} 个结果</span>}
+              <div className="flex items-center gap-2">
+                <div 
+                  className="flex items-center gap-1 cursor-help" 
+                  title={everythingPath ? `Everything 路径: ${everythingPath}` : 'Everything 未安装或未在 PATH 中'}
+                >
+                  <div className={`w-2 h-2 rounded-full ${isEverythingAvailable ? 'bg-green-500' : 'bg-gray-300'}`}></div>
+                  <span className={isEverythingAvailable ? 'text-green-600' : 'text-gray-400'}>
+                    Everything {isEverythingAvailable ? '已启用' : '未检测到'}
+                  </span>
+                </div>
+                {!isEverythingAvailable && (
+                  <button
+                    onClick={handleDownloadEverything}
+                    disabled={isDownloading}
+                    className={`px-2 py-1 text-xs rounded transition-colors ${
+                      isDownloading
+                        ? 'bg-gray-400 text-white cursor-not-allowed'
+                        : 'bg-blue-500 text-white hover:bg-blue-600'
+                    }`}
+                    title="下载并安装 Everything"
+                  >
+                    {isDownloading ? `下载中 ${downloadProgress}%` : '下载'}
+                  </button>
+                )}
+              </div>
             </div>
-          )}
+            {results.length > 0 && (
+              <span>↑↓ 选择 · Enter 打开 · Esc 关闭</span>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Download Modal */}
+      {showDownloadModal && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-auto"
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
+          onClick={handleCloseDownloadModal}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 my-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">下载 Everything</h3>
+              <button
+                onClick={handleCloseDownloadModal}
+                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                style={{ fontSize: '24px', lineHeight: '1' }}
+              >
+                ×
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {isDownloading ? (
+                <div className="space-y-3">
+                  <div className="text-sm text-gray-600">
+                    <p className="mb-2">正在下载 Everything 安装包...</p>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-blue-500 h-full transition-all duration-300"
+                      style={{ width: `${downloadProgress}%` }}
+                    ></div>
+                  </div>
+                  <div className="text-center text-sm text-gray-500">
+                    {downloadProgress}%
+                  </div>
+                </div>
+              ) : downloadedPath ? (
+                <div className="space-y-3">
+                  <div className="text-sm text-gray-600">
+                    <p className="mb-2">✅ Everything 安装包下载完成！</p>
+                    <p className="mb-2 text-xs text-gray-500 break-all">
+                      保存位置：{downloadedPath}
+                    </p>
+                    <p className="mb-2">请按照以下步骤操作：</p>
+                    <ol className="list-decimal list-inside space-y-1 ml-2">
+                      <li>点击"打开安装程序"按钮运行安装程序</li>
+                      <li>按照安装向导完成安装</li>
+                      <li>安装完成后，点击"重新检测"按钮</li>
+                    </ol>
+                  </div>
+                  
+                  <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm text-blue-800">
+                    <p className="font-medium mb-1">💡 提示：</p>
+                    <p>Everything 安装后，本软件会自动检测并启用文件搜索功能。</p>
+                  </div>
+                  
+                  <div className="flex flex-wrap gap-2 justify-end">
+                    <button
+                      onClick={handleCloseDownloadModal}
+                      className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors whitespace-nowrap"
+                    >
+                      稍后
+                    </button>
+                    <button
+                      onClick={handleOpenInstaller}
+                      className="px-4 py-2 text-sm bg-green-500 text-white rounded hover:bg-green-600 transition-colors whitespace-nowrap"
+                    >
+                      打开安装程序
+                    </button>
+                    <button
+                      onClick={handleCheckAgain}
+                      className="px-4 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors whitespace-nowrap"
+                    >
+                      重新检测
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

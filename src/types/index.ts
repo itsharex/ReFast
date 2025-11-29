@@ -44,3 +44,10 @@ export interface FileHistoryItem {
   use_count: number;
 }
 
+export interface EverythingResult {
+  path: string;
+  name: string;
+  size?: number;
+  date_modified?: string;
+}
+

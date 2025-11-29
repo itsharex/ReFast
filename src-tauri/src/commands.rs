@@ -1,4 +1,5 @@
 use crate::app_search;
+use crate::everything_search;
 use crate::file_history;
 use crate::hooks;
 use crate::recording::{RecordingMeta, RecordingState};
@@ -8,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 static RECORDING_STATE: LazyLock<Arc<Mutex<RecordingState>>> = LazyLock::new(|| Arc::new(Mutex::new(RecordingState::new())));
 
@@ -567,6 +568,149 @@ pub fn add_file_to_history(path: String, app: tauri::AppHandle) -> Result<(), St
 #[tauri::command]
 pub fn search_file_history(query: String) -> Result<Vec<file_history::FileHistoryItem>, String> {
     Ok(file_history::search_file_history(&query))
+}
+
+#[tauri::command]
+pub fn search_everything(query: String) -> Result<Vec<everything_search::EverythingResult>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Limit to 20 results for performance
+        everything_search::windows::search_files(&query, 20)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Everything search is only available on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn is_everything_available() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        everything_search::windows::is_everything_available()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
+pub fn get_everything_path() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::path::PathBuf;
+        // Try to find Everything executable
+        let common_paths = [
+            r"C:\Program Files\Everything\es.exe",
+            r"C:\Program Files (x86)\Everything\es.exe",
+            r"C:\Tools\Everything\es.exe",
+            r"C:\Everything\es.exe",
+        ];
+        
+        for path in &common_paths {
+            let exe_path = PathBuf::from(path);
+            if exe_path.exists() {
+                return Ok(Some(path.to_string()));
+            }
+        }
+        
+        // Try to find in PATH
+        if let Ok(output) = std::process::Command::new("where")
+            .arg("es.exe")
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    return Ok(Some(path_str));
+                }
+            }
+        }
+        
+        Ok(None)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub fn open_everything_download() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Open Everything download page in default browser
+        let url = "https://www.voidtools.com/downloads/";
+        std::process::Command::new("cmd")
+            .args(&["/C", "start", "", url])
+            .spawn()
+            .map_err(|e| format!("Failed to open download page: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Everything is only available on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn download_everything(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write;
+        use std::fs::File;
+        
+        // Get temp directory
+        let temp_dir = std::env::temp_dir();
+        let installer_path = temp_dir.join("Everything-Setup.exe");
+        
+        // Determine download URL based on system architecture
+        // For now, use 64-bit version (most common)
+        let download_url = "https://www.voidtools.com/Everything-1.4.1.1024.x64-Setup.exe";
+        
+        // Create HTTP client
+        let client = reqwest::Client::new();
+        let response = client
+            .get(download_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to start download: {}", e))?;
+        
+        let total_size = response
+            .content_length()
+            .ok_or_else(|| "Failed to get content length".to_string())?;
+        
+        // Create file
+        let mut file = File::create(&installer_path)
+            .map_err(|e| format!("Failed to create file: {}", e))?;
+        
+        let mut downloaded: u64 = 0;
+        let mut stream = response.bytes_stream();
+        
+        // Use tokio stream to read chunks
+        use futures_util::StreamExt;
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|e| format!("Failed to read chunk: {}", e))?;
+            file.write_all(&chunk)
+                .map_err(|e| format!("Failed to write chunk: {}", e))?;
+            
+            downloaded += chunk.len() as u64;
+            
+            // Emit progress event to launcher window
+            let progress = (downloaded as f64 / total_size as f64 * 100.0) as u32;
+            if let Some(window) = app.get_webview_window("launcher") {
+                let _ = window.emit("everything-download-progress", progress);
+            }
+        }
+        
+        let path_str = installer_path.to_string_lossy().to_string();
+        Ok(path_str)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Everything is only available on Windows".to_string())
+    }
 }
 
 #[tauri::command]

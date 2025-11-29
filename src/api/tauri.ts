@@ -77,5 +77,25 @@ export const tauriApi = {
   async getClipboardFilePath(): Promise<string | null> {
     return invoke("get_clipboard_file_path");
   },
+
+  async searchEverything(query: string): Promise<any[]> {
+    return invoke("search_everything", { query });
+  },
+
+  async isEverythingAvailable(): Promise<boolean> {
+    return invoke("is_everything_available");
+  },
+
+  async getEverythingPath(): Promise<string | null> {
+    return invoke("get_everything_path");
+  },
+
+  async openEverythingDownload(): Promise<void> {
+    return invoke("open_everything_download");
+  },
+
+  async downloadEverything(): Promise<string> {
+    return invoke("download_everything");
+  },
 };
 
