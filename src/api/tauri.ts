@@ -86,6 +86,14 @@ export const tauriApi = {
     return invoke("is_everything_available");
   },
 
+  async getEverythingStatus(): Promise<{ available: boolean; error?: string }> {
+    const result = await invoke<[boolean, string | null]>("get_everything_status");
+    return {
+      available: result[0],
+      error: result[1] || undefined,
+    };
+  },
+
   async getEverythingPath(): Promise<string | null> {
     return invoke("get_everything_path");
   },
@@ -96,6 +104,10 @@ export const tauriApi = {
 
   async downloadEverything(): Promise<string> {
     return invoke("download_everything");
+  },
+
+  async downloadEsExe(): Promise<string> {
+    return invoke("download_es_exe");
   },
 };
 

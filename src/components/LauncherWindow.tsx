@@ -22,6 +22,7 @@ export function LauncherWindow() {
   const [everythingResults, setEverythingResults] = useState<EverythingResult[]>([]);
   const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
   const [everythingPath, setEverythingPath] = useState<string | null>(null);
+  const [everythingError, setEverythingError] = useState<string | null>(null);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -36,11 +37,12 @@ export function LauncherWindow() {
   useEffect(() => {
     const checkEverything = async () => {
       try {
-        const available = await tauriApi.isEverythingAvailable();
-        setIsEverythingAvailable(available);
+        const status = await tauriApi.getEverythingStatus();
+        setIsEverythingAvailable(status.available);
+        setEverythingError(status.error || null);
         
         // Get Everything path for debugging
-        if (available) {
+        if (status.available) {
           try {
             const path = await tauriApi.getEverythingPath();
             setEverythingPath(path);
@@ -51,13 +53,14 @@ export function LauncherWindow() {
             console.error("Failed to get Everything path:", error);
           }
         } else {
-          console.warn("Everything is not available. Please install Everything or add es.exe to PATH.");
+          console.warn("Everything is not available:", status.error);
           setEverythingPath(null);
         }
       } catch (error) {
         console.error("Failed to check Everything availability:", error);
         setIsEverythingAvailable(false);
         setEverythingPath(null);
+        setEverythingError("检查失败");
       }
     };
     checkEverything();
@@ -67,20 +70,29 @@ export function LauncherWindow() {
   useEffect(() => {
     if (!isDownloading) return;
 
-    let unlistenFn: (() => void) | null = null;
+    let unlistenFn1: (() => void) | null = null;
+    let unlistenFn2: (() => void) | null = null;
     
     const setupProgressListener = async () => {
-      const unlisten = await listen<number>("everything-download-progress", (event) => {
+      const unlisten1 = await listen<number>("everything-download-progress", (event) => {
         setDownloadProgress(event.payload);
       });
-      unlistenFn = unlisten;
+      unlistenFn1 = unlisten1;
+      
+      const unlisten2 = await listen<number>("es-download-progress", (event) => {
+        setDownloadProgress(event.payload);
+      });
+      unlistenFn2 = unlisten2;
     };
 
     setupProgressListener();
 
     return () => {
-      if (unlistenFn) {
-        unlistenFn();
+      if (unlistenFn1) {
+        unlistenFn1();
+      }
+      if (unlistenFn2) {
+        unlistenFn2();
       }
     };
   }, [isDownloading]);
@@ -234,7 +246,10 @@ export function LauncherWindow() {
       searchApplications(query);
       searchFileHistory(query);
       if (isEverythingAvailable) {
+        console.log("Everything is available, calling searchEverything with query:", query);
         searchEverything(query);
+      } else {
+        console.log("Everything is not available, skipping search. isEverythingAvailable:", isEverythingAvailable);
       }
     }, 500); // 500ms debounce
     
@@ -407,11 +422,40 @@ export function LauncherWindow() {
 
   const searchEverything = async (searchQuery: string) => {
     try {
+      console.log("Searching Everything with query:", searchQuery);
       const results = await tauriApi.searchEverything(searchQuery);
+      console.log("Everything search results:", results);
       setEverythingResults(results);
     } catch (error) {
       console.error("Failed to search Everything:", error);
       setEverythingResults([]);
+      
+      // If search fails, re-check Everything status to keep state in sync
+      // This handles cases where status check passes but actual search fails
+      const errorStr = typeof error === 'string' ? error : String(error);
+      
+      // Check if it's a known error that indicates Everything is not available
+      if (errorStr.includes('NOT_INSTALLED') || 
+          errorStr.includes('EXECUTABLE_CORRUPTED') ||
+          errorStr.includes('SERVICE_NOT_RUNNING') ||
+          errorStr.includes('not found') ||
+          errorStr.includes('未找到') ||
+          errorStr.includes('未运行')) {
+        // Re-check status and update state
+        try {
+          const status = await tauriApi.getEverythingStatus();
+          setIsEverythingAvailable(status.available);
+          setEverythingError(status.error || null);
+          
+          if (!status.available) {
+            console.warn("Everything became unavailable after search failed:", status.error);
+          }
+        } catch (statusError) {
+          console.error("Failed to re-check Everything status:", statusError);
+          setIsEverythingAvailable(false);
+          setEverythingError("搜索失败后无法重新检查状态");
+        }
+      }
     }
   };
 
@@ -440,21 +484,63 @@ export function LauncherWindow() {
     setShowDownloadModal(false);
   };
 
+  const handleDownloadEsExe = async () => {
+    try {
+      setIsDownloading(true);
+      setDownloadProgress(0);
+      setDownloadedPath(null);
+      setShowDownloadModal(true); // 显示下载进度模态框
+      
+      const path = await tauriApi.downloadEsExe();
+      setDownloadedPath(path);
+      setDownloadProgress(100);
+      setIsDownloading(false);
+      // 下载完成后，自动检测
+      await handleCheckAgain();
+    } catch (error) {
+      console.error("Failed to download es.exe:", error);
+      setIsDownloading(false);
+      setDownloadProgress(0);
+      setShowDownloadModal(false);
+      alert(`下载失败: ${error}`);
+    }
+  };
+
   const handleCheckAgain = async () => {
     try {
-      const available = await tauriApi.isEverythingAvailable();
-      setIsEverythingAvailable(available);
+      // Force a fresh check with detailed status
+      const status = await tauriApi.getEverythingStatus();
+      setIsEverythingAvailable(status.available);
+      setEverythingError(status.error || null);
       
-      if (available) {
+      if (status.available) {
         const path = await tauriApi.getEverythingPath();
         setEverythingPath(path);
         setShowDownloadModal(false);
         if (path) {
           console.log("Everything found at:", path);
         }
+      } else {
+        // Show helpful message based on error type
+        let errorMessage = "Everything 仍未检测到。\n\n";
+        if (status.error) {
+          if (status.error.startsWith("NOT_INSTALLED")) {
+            errorMessage += "es.exe 未找到。\n请点击\"下载 es.exe\"按钮下载并安装。";
+          } else if (status.error.startsWith("EXECUTABLE_CORRUPTED")) {
+            errorMessage += "es.exe 文件损坏。\n请删除损坏的文件后重新下载。\n\n文件位置：C:\\Program Files\\Everything\\es.exe";
+          } else if (status.error.startsWith("SERVICE_NOT_RUNNING")) {
+            errorMessage += "Everything 服务未运行。\n请启动 Everything 主程序，然后点击\"刷新\"按钮。";
+          } else {
+            errorMessage += `错误：${status.error}\n\n请确保：\n1. Everything 已正确安装\n2. es.exe 文件存在于 Everything 安装目录中\n3. Everything 主程序正在运行`;
+          }
+        } else {
+          errorMessage += "请确保：\n1. Everything 已正确安装\n2. es.exe 文件存在于 Everything 安装目录中\n3. Everything 主程序正在运行";
+        }
+        alert(errorMessage);
       }
     } catch (error) {
       console.error("Failed to check Everything:", error);
+      alert(`检测失败: ${error}`);
     }
   };
 
@@ -912,20 +998,34 @@ export function LauncherWindow() {
                   <span className={isEverythingAvailable ? 'text-green-600' : 'text-gray-400'}>
                     Everything {isEverythingAvailable ? '已启用' : '未检测到'}
                   </span>
+                  {everythingError && !isEverythingAvailable && (
+                    <span className="text-xs text-red-500 ml-2" title={everythingError}>
+                      ({everythingError.split(':')[0]})
+                    </span>
+                  )}
                 </div>
                 {!isEverythingAvailable && (
-                  <button
-                    onClick={handleDownloadEverything}
-                    disabled={isDownloading}
-                    className={`px-2 py-1 text-xs rounded transition-colors ${
-                      isDownloading
-                        ? 'bg-gray-400 text-white cursor-not-allowed'
-                        : 'bg-blue-500 text-white hover:bg-blue-600'
-                    }`}
-                    title="下载并安装 Everything"
-                  >
-                    {isDownloading ? `下载中 ${downloadProgress}%` : '下载'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCheckAgain}
+                      className="px-2 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+                      title="重新检测 Everything"
+                    >
+                      刷新
+                    </button>
+                    <button
+                      onClick={handleDownloadEsExe}
+                      disabled={isDownloading}
+                      className={`px-2 py-1 text-xs rounded transition-colors ${
+                        isDownloading
+                          ? 'bg-gray-400 text-white cursor-not-allowed'
+                          : 'bg-blue-500 text-white hover:bg-blue-600'
+                      }`}
+                      title="下载 es.exe（需要先安装 Everything）"
+                    >
+                      {isDownloading ? `下载中 ${downloadProgress}%` : '下载 es.exe'}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -962,7 +1062,7 @@ export function LauncherWindow() {
               {isDownloading ? (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
-                    <p className="mb-2">正在下载 Everything 安装包...</p>
+                    <p className="mb-2">正在下载 es.exe...</p>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
                     <div
@@ -977,21 +1077,17 @@ export function LauncherWindow() {
               ) : downloadedPath ? (
                 <div className="space-y-3">
                   <div className="text-sm text-gray-600">
-                    <p className="mb-2">✅ Everything 安装包下载完成！</p>
+                    <p className="mb-2">✅ es.exe 下载完成！</p>
                     <p className="mb-2 text-xs text-gray-500 break-all">
                       保存位置：{downloadedPath}
                     </p>
-                    <p className="mb-2">请按照以下步骤操作：</p>
-                    <ol className="list-decimal list-inside space-y-1 ml-2">
-                      <li>点击"打开安装程序"按钮运行安装程序</li>
-                      <li>按照安装向导完成安装</li>
-                      <li>安装完成后，点击"重新检测"按钮</li>
-                    </ol>
+                    <p className="mb-2">es.exe 已自动放置到 Everything 安装目录中。</p>
+                    <p className="mb-2">如果 Everything 已启用，现在应该可以正常使用文件搜索功能了。</p>
                   </div>
                   
                   <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm text-blue-800">
                     <p className="font-medium mb-1">💡 提示：</p>
-                    <p>Everything 安装后，本软件会自动检测并启用文件搜索功能。</p>
+                    <p>如果 Everything 仍未检测到，请点击"重新检测"按钮。</p>
                   </div>
                   
                   <div className="flex flex-wrap gap-2 justify-end">
@@ -999,13 +1095,7 @@ export function LauncherWindow() {
                       onClick={handleCloseDownloadModal}
                       className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors whitespace-nowrap"
                     >
-                      稍后
-                    </button>
-                    <button
-                      onClick={handleOpenInstaller}
-                      className="px-4 py-2 text-sm bg-green-500 text-white rounded hover:bg-green-600 transition-colors whitespace-nowrap"
-                    >
-                      打开安装程序
+                      关闭
                     </button>
                     <button
                       onClick={handleCheckAgain}
