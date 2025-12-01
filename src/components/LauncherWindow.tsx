@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { tauriApi } from "../api/tauri";
-import type { AppInfo, FileHistoryItem, EverythingResult } from "../types";
+import type { AppInfo, FileHistoryItem, EverythingResult, EverythingSearchResponse } from "../types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -20,6 +20,7 @@ export function LauncherWindow() {
   const [filteredApps, setFilteredApps] = useState<AppInfo[]>([]);
   const [filteredFiles, setFilteredFiles] = useState<FileHistoryItem[]>([]);
   const [everythingResults, setEverythingResults] = useState<EverythingResult[]>([]);
+  const [everythingTotalCount, setEverythingTotalCount] = useState<number | null>(null);
   const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
   const [everythingPath, setEverythingPath] = useState<string | null>(null);
   const [everythingVersion, setEverythingVersion] = useState<string | null>(null);
@@ -256,6 +257,8 @@ export function LauncherWindow() {
       setFilteredApps([]);
       setFilteredFiles([]);
       setEverythingResults([]);
+      setEverythingTotalCount(null);
+      setEverythingTotalCount(null);
       setResults([]);
       setSelectedIndex(0);
       setIsSearchingEverything(false);
@@ -300,7 +303,7 @@ export function LauncherWindow() {
         path: everything.path,
       })),
     ];
-    setResults(combinedResults.slice(0, 10)); // Limit to 10 results
+    setResults(combinedResults); // Show all results (with scroll if needed)
     setSelectedIndex(0);
     
     // Adjust window size based on content
@@ -447,6 +450,8 @@ export function LauncherWindow() {
   const searchEverything = async (searchQuery: string) => {
     if (!isEverythingAvailable) {
       setEverythingResults([]);
+      setEverythingTotalCount(null);
+      setEverythingTotalCount(null);
       setIsSearchingEverything(false);
       return;
     }
@@ -463,7 +468,7 @@ export function LauncherWindow() {
     try {
       setIsSearchingEverything(true);
       console.log("Searching Everything with query:", searchQuery);
-      const results = await tauriApi.searchEverything(searchQuery);
+      const response = await tauriApi.searchEverything(searchQuery);
       
       // Check if this search was cancelled
       if (currentSearchRef.current?.cancelled || currentSearchRef.current?.query !== searchQuery) {
@@ -471,8 +476,9 @@ export function LauncherWindow() {
         return;
       }
       
-      console.log("Everything search results:", results.length, "results found");
-      setEverythingResults(results);
+      console.log("Everything search results:", response.results.length, "results found (total:", response.total_count, ")");
+      setEverythingResults(response.results);
+      setEverythingTotalCount(response.total_count);
     } catch (error) {
       // Check if this search was cancelled
       if (currentSearchRef.current?.cancelled || currentSearchRef.current?.query !== searchQuery) {
@@ -482,6 +488,7 @@ export function LauncherWindow() {
       
       console.error("Failed to search Everything:", error);
       setEverythingResults([]);
+      setEverythingTotalCount(null);
       
       // If search fails, re-check Everything status to keep state in sync
       // This handles cases where status check passes but actual search fails
@@ -1111,8 +1118,10 @@ export function LauncherWindow() {
                         <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                       </svg>
                       <span>
-                        Everything: {everythingResults.length > 0 
-                          ? `找到 ${everythingResults.length} 个结果` 
+                        Everything: {everythingTotalCount !== null 
+                          ? `找到 ${everythingTotalCount} 个结果` 
+                          : everythingResults.length > 0
+                          ? `找到 ${everythingResults.length} 个结果`
                           : "无结果"}
                       </span>
                     </>

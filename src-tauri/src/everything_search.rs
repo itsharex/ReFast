@@ -10,6 +10,12 @@ pub struct EverythingResult {
     pub is_folder: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct EverythingSearchResponse {
+    pub results: Vec<EverythingResult>,
+    pub total_count: u32,
+}
+
 /// Everything 错误类型枚举
 #[derive(Debug, Clone)]
 pub enum EverythingError {
@@ -105,12 +111,18 @@ pub mod windows {
     // Everything IPC 回复结构体（Everything 1.4.1 兼容版本）
     // 注意：Everything 1.4.1 在 totitems 和 numitems 之间插入了两个额外的 u32 字段
     // 导致头部从 8 字节变为 20 字节
+    // 实际字段含义：
+    // Offset 0: 可能是当前批次或已处理数量
+    // Offset 4: 可能是已处理的偏移量
+    // Offset 8: 真正的总结果数（totitems）
+    // Offset 12: 当前返回的结果数（numitems）
+    // Offset 16: 当前结果起始索引（offset）
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     struct EverythingIpcList {
-        totitems: u32,    // Offset 0  - DWORD - 总结果数
-        unknown1: u32,    // Offset 4  - 未知字段（可能是全库文件数统计）
-        unknown2: u32,    // Offset 8  - 未知字段（可能是全库文件夹数统计）
+        field0: u32,      // Offset 0  - 未知字段
+        unknown1: u32,    // Offset 4  - 可能是已处理的偏移量
+        totitems: u32,    // Offset 8  - DWORD - 真正的总结果数（之前误认为是 unknown2）
         numitems: u32,    // Offset 12 - DWORD - 当前返回的结果数
         offset: u32,      // Offset 16 - DWORD - 当前结果起始索引
         // items[] follows at offset 20
@@ -128,7 +140,7 @@ pub mod windows {
     // 全局状态：存储每个窗口句柄对应的发送器
     use std::collections::HashMap;
     
-    static WINDOW_SENDERS: OnceLock<Arc<Mutex<HashMap<HWND, mpsc::Sender<Result<Vec<String>, EverythingError>>>>>> = OnceLock::new();
+    static WINDOW_SENDERS: OnceLock<Arc<Mutex<HashMap<HWND, mpsc::Sender<Result<(Vec<String>, u32, u32, u32), EverythingError>>>>>> = OnceLock::new();
     
     // 日志文件（使用临时目录，按天生成）
     struct LogFileState {
@@ -259,7 +271,7 @@ pub mod windows {
         };
     }
     
-    fn get_window_senders() -> &'static Arc<Mutex<HashMap<HWND, mpsc::Sender<Result<Vec<String>, EverythingError>>>>> {
+    fn get_window_senders() -> &'static Arc<Mutex<HashMap<HWND, mpsc::Sender<Result<(Vec<String>, u32, u32, u32), EverythingError>>>>> {
         WINDOW_SENDERS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
     }
 
@@ -324,9 +336,16 @@ pub mod windows {
                 
                 if is_reply {
                     log_debug!("[DEBUG] Processing Everything reply (dwData={})", cds.dwData);
-                    // 解析结果
+                    // 解析结果（现在返回四元组：结果列表, 总条数, 当前页条数, 当前页偏移量）
                     let result = parse_ipc_reply(&cds);
-                    log_debug!("[DEBUG] Parsed result: {:?}", result);
+                    match &result {
+                        Ok((paths, tot, num, off)) => {
+                            log_debug!("[DEBUG] Parsed result: {} paths (Total: {}, This batch: {}, Offset: {})", paths.len(), tot, num, off);
+                        }
+                        Err(e) => {
+                            log_debug!("[DEBUG] Parsed result error: {:?}", e);
+                        }
+                    }
                     
                     // 获取对应的发送器并发送结果
                     let senders = get_window_senders();
@@ -374,7 +393,7 @@ pub mod windows {
     /// Everything IPC 查询句柄，用于管理消息循环和结果接收
     struct EverythingIpcHandle {
         reply_hwnd: HWND,
-        result_receiver: mpsc::Receiver<Result<Vec<String>, EverythingError>>,
+        result_receiver: mpsc::Receiver<Result<(Vec<String>, u32, u32, u32), EverythingError>>,
     }
 
         impl EverythingIpcHandle {
@@ -492,30 +511,10 @@ pub mod windows {
     }
 
 
-    /// 安全读取 UTF-16 字符串（从基地址 + 偏移量）
-    unsafe fn read_u16_string_at_offset(base: *const u8, offset: u32, max_len: usize, data_size: u32) -> Option<String> {
-        // 边界检查：确保偏移量在有效范围内
-        if offset as usize >= data_size as usize {
-            log_debug!("[DEBUG] ERROR: offset {} exceeds data size {}", offset, data_size);
-            return None;
-        }
-        
-        // UTF-16 字符串偏移必须是偶数（2 字节对齐）
-        // 如果 offset 是奇数，说明数据无效，直接返回 None
-        if (offset % 2) != 0 {
-            log_debug!("[DEBUG] ERROR: offset {} is not aligned (must be even for UTF-16), skipping", offset);
-            return None;
-        }
-        
-        // 计算字符串指针位置（基地址 + 字节偏移）
-        let str_ptr = base.add(offset as usize) as *const u16;
-        
-        // 读取字符串直到遇到 null 终止符
+    /// 从 u16 指针读取 UTF-16 字符串（辅助函数）
+    unsafe fn read_u16_string(str_ptr: *const u16, max_chars: usize) -> String {
         let mut chars = Vec::new();
         let mut len = 0;
-        
-        // 计算最大可读取的字符数（防止越界）
-        let max_chars = ((data_size as usize - offset as usize) / 2).min(max_len);
         
         while len < max_chars {
             let wchar = *str_ptr.add(len);
@@ -527,14 +526,48 @@ pub mod windows {
         }
         
         if !chars.is_empty() {
-            Some(from_wide_string(&chars))
+            from_wide_string(&chars)
         } else {
-            None
+            String::new()
         }
     }
 
+    /// 安全读取 UTF-16 字符串（从基地址 + 偏移量）
+    /// 允许 offset == 0（表示空字符串）
+    unsafe fn read_u16_string_at_offset(base: *const u8, offset: u32, max_len: usize, data_size: u32) -> Option<String> {
+        // offset == 0 表示空字符串，这是一个合法值
+        if offset == 0 {
+            return Some(String::new());
+        }
+        
+        // 边界检查：确保偏移量在有效范围内
+        if offset as usize >= data_size as usize {
+            log_debug!("[DEBUG] ERROR: offset {} exceeds data size {}", offset, data_size);
+            return None;
+        }
+        
+        // 对于奇数 offset，尝试读取（某些情况下 Everything 可能使用奇数 offset）
+        // 但为了安全，我们优先检查是否为偶数
+        let str_ptr = if (offset % 2) == 0 {
+            // 偶数 offset：直接作为 u16 指针使用
+            base.add(offset as usize) as *const u16
+        } else {
+            // 奇数 offset：记录警告但尝试读取（可能需要特殊处理）
+            log_debug!("[DEBUG] WARNING: offset {} is odd (not aligned), attempting to read anyway", offset);
+            // 对齐到最近的偶数地址
+            let aligned_offset = (offset as usize / 2) * 2;
+            base.add(aligned_offset) as *const u16
+        };
+        
+        // 计算最大可读取的字符数（防止越界）
+        let max_chars = ((data_size as usize - offset as usize) / 2).min(max_len);
+        
+        Some(read_u16_string(str_ptr, max_chars))
+    }
+
     /// 解析 Everything IPC 回复（官方协议）
-    fn parse_ipc_reply(cds: &COPYDATASTRUCT) -> Result<Vec<String>, EverythingError> {
+    /// 返回 (结果列表, 总条数, 当前页条数, 当前页偏移量)
+    fn parse_ipc_reply(cds: &COPYDATASTRUCT) -> Result<(Vec<String>, u32, u32, u32), EverythingError> {
         let list_size = std::mem::size_of::<EverythingIpcList>() as u32;
         log_debug!("[DEBUG] parse_ipc_reply: cbData={}, expected list_size={}", cds.cbData, list_size);
         
@@ -543,19 +576,12 @@ pub mod windows {
             return Err(EverythingError::IpcFailed("回复数据太短".to_string()));
         }
 
+        //不往下执行
+        return Ok((Vec::new(), 0, 0, 0));
+
         unsafe {
-            // 先打印原始数据的前64字节，用于诊断
-            let mut raw_data_hex = String::new();
-            for i in 0..64.min(cds.cbData as usize) {
-                if i % 16 == 0 {
-                    raw_data_hex.push_str(&format!("\n[DEBUG]   {:04X}: ", i));
-                }
-                let byte = *(cds.lpData as *const u8).add(i);
-                raw_data_hex.push_str(&format!("{:02X} ", byte));
-            }
-            log_debug!("[DEBUG] First 64 bytes of reply data:{}", raw_data_hex);
-            
-            // 手动解析前几个 u32 值，看看实际数据
+            // 性能优化：只在调试模式下打印详细数据
+            // 手动解析前几个 u32 值（用于验证结构体）
             let bytes = cds.lpData as *const u8;
             let u32_0 = u32::from_le_bytes([
                 *bytes.add(0), *bytes.add(1), *bytes.add(2), *bytes.add(3)
@@ -569,42 +595,41 @@ pub mod windows {
             let u32_12 = u32::from_le_bytes([
                 *bytes.add(12), *bytes.add(13), *bytes.add(14), *bytes.add(15)
             ]);
-            log_debug!("[DEBUG] Raw u32 values: [0]={}, [4]={}, [8]={}, [12]={}", 
-                u32_0, u32_4, u32_8, u32_12);
             
             // 读取 EverythingIpcList 结构体（Everything 1.4.1 兼容格式：20 字节头部）
             let list_ptr = cds.lpData as *const EverythingIpcList;
             let list = &*list_ptr;
             
-            let totitems = list.totitems;  // Offset 0
-            let numitems = list.numitems;  // Offset 12 (跳过两个 unknown 字段)
-            let offset = list.offset;      // Offset 16
+            let totitems = list.totitems;  // Offset 8 - 真正的总结果数
+            let numitems = list.numitems;  // Offset 12 - 当前返回的结果数
+            let offset = list.offset;      // Offset 16 - 当前结果起始索引
             
-            log_debug!("[DEBUG] Header -> TotItems: {}, NumItems: {}, Offset: {}", totitems, numitems, offset);
-            log_debug!("[DEBUG] Header -> Unknown1: {}, Unknown2: {}", list.unknown1, list.unknown2);
+            log_debug!("[DEBUG] Header -> TotItems: {} (offset 8), NumItems: {} (offset 12), Offset: {} (offset 16)", totitems, numitems, offset);
+            log_debug!("[DEBUG] Header -> Field0: {} (offset 0), Unknown1: {} (offset 4)", list.field0, list.unknown1);
             
-            // 验证读取的值是否合理
-            if numitems > 2000 {
-                log_debug!("[DEBUG] ERROR: NumItems {} is suspicious (>2000), aborting parse.", numitems);
-                log_debug!("[DEBUG] Raw u32 values were: [0]={}, [4]={}, [8]={}, [12]={}", 
-                    u32_0, u32_4, u32_8, u32_12);
+            // 验证读取的值是否合理（只检查 totitems，不限制 numitems，因为分页时 numitems 是批次大小）
+            if totitems > 10_000_000 {
+                log_debug!("[DEBUG] ERROR: TotItems {} is suspicious (>10M), aborting parse.", totitems);
                 return Err(EverythingError::IpcFailed(format!(
-                    "结果数量异常: {} (超过合理范围)",
-                    numitems
+                    "总结果数异常: {} (超过合理范围)",
+                    totitems
                 )));
+            }
+            
+            // 记录分页信息
+            if totitems > numitems {
+                log_debug!("[DEBUG] Pagination detected: TotItems={}, NumItems={}, Offset={} (more results available)", 
+                    totitems, numitems, offset);
             }
             
             // 如果 totitems 和 numitems 为 0，直接返回空结果
             if numitems == 0 {
                 log_debug!("[DEBUG] numitems is 0, returning empty result");
-                return Ok(Vec::new());
+                return Ok((Vec::new(), totitems, 0, offset));
             }
             
-            // 限制处理的 item 数量，防止解析错误导致卡死
-            let items_to_process = numitems.min(1000);
-            if items_to_process < numitems {
-                log_debug!("[DEBUG] WARNING: Limiting items from {} to {} for safety", numitems, items_to_process);
-            }
+            // 处理所有返回的 item（不再限制）
+            let items_to_process = numitems;
             
             // 计算 Items 起始位置（Everything 1.4.1: Items 数组紧跟在 20 字节的 Header 之后）
             let items_start_offset = 20;
@@ -629,6 +654,8 @@ pub mod windows {
             // filename_offset 和 path_offset 都是相对于 lpData 的偏移
             
             let mut results = Vec::new();
+            let mut skipped_count = 0;
+            let mut invalid_offset_count = 0;
             
             // 遍历每个 item
             for i in 0..items_to_process {
@@ -646,37 +673,104 @@ pub mod windows {
                 let filename_offset = item.filename_offset;
                 let path_offset = item.path_offset;
                 
-                log_debug!("[DEBUG] Item {}: flags={}, filename_offset={}, path_offset={}", 
-                    i, flags, filename_offset, path_offset);
+                // 只在处理前几个 item 时输出详细日志，减少日志噪音
+                if i < 5 {
+                    log_debug!("[DEBUG] Item {}: flags={}, filename_offset={}, path_offset={}", 
+                        i, flags, filename_offset, path_offset);
+                }
                 
-                // 解析字符串（优先使用 path_offset 完整路径）
-                // 注意：offset 必须 > 0、为偶数（UTF-16 需要 2 字节对齐）、且在有效范围内
-                let path_str = if path_offset > 0 
-                    && (path_offset % 2) == 0  // 必须是偶数
-                    && (path_offset as usize) < cds.cbData as usize {
-                    read_u16_string_at_offset(cds.lpData as *const u8, path_offset, 32767, cds.cbData)
-                } else if filename_offset > 0 
-                    && (filename_offset % 2) == 0  // 必须是偶数
-                    && (filename_offset as usize) < cds.cbData as usize {
-                    read_u16_string_at_offset(cds.lpData as *const u8, filename_offset, 32767, cds.cbData)
-                } else {
-                    if path_offset > 0 || filename_offset > 0 {
-                        log_debug!("[DEBUG] WARNING: Item {} has invalid offsets (path_offset={}, filename_offset={}) - offsets must be even and > 0", 
-                            i, path_offset, filename_offset);
+                // 解析文件名（允许 offset=0 表示空）
+                let filename = if filename_offset == 0 {
+                    String::new()  // offset=0 表示空
+                } else if (filename_offset as usize) < cds.cbData as usize {
+                    match read_u16_string_at_offset(cds.lpData as *const u8, filename_offset, 32767, cds.cbData) {
+                        Some(s) => s,
+                        None => {
+                            invalid_offset_count += 1;
+                            if i < 10 {
+                                log_debug!("[DEBUG] WARNING: Item {} filename_offset={} failed to read", i, filename_offset);
+                            }
+                            String::from("[Invalid Offset]")
+                        }
                     }
-                    None
+                } else {
+                    invalid_offset_count += 1;
+                    if i < 10 {
+                        log_debug!("[DEBUG] WARNING: Item {} filename_offset={} exceeds data size", i, filename_offset);
+                    }
+                    String::from("[Invalid Offset]")
                 };
                 
-                if let Some(path) = path_str {
-                    log_debug!("[DEBUG] Found result path: {}", path);
-                    results.push(path);
+                // 解析路径部分（允许 offset=0 表示空，例如根目录）
+                let path_part = if path_offset == 0 {
+                    String::new()  // offset=0 表示空（例如根目录）
+                } else if (path_offset as usize) < cds.cbData as usize {
+                    match read_u16_string_at_offset(cds.lpData as *const u8, path_offset, 32767, cds.cbData) {
+                        Some(s) => s,
+                        None => {
+                            // path offset 无效不应该导致整个 item 丢弃，给个空值即可
+                            if i < 10 {
+                                log_debug!("[DEBUG] WARNING: Item {} path_offset={} failed to read, using empty path", i, path_offset);
+                            }
+                            String::new()
+                        }
+                    }
                 } else {
-                    log_debug!("[DEBUG] WARNING: Failed to read string for item {}", i);
+                    // path offset 超出范围，使用空路径
+                    if i < 10 {
+                        log_debug!("[DEBUG] WARNING: Item {} path_offset={} exceeds data size, using empty path", i, path_offset);
+                    }
+                    String::new()
+                };
+                
+                // 如果文件名是无效标记，跳过这个 item
+                if filename == "[Invalid Offset]" {
+                    skipped_count += 1;
+                    if i < 10 {
+                        log_debug!("[DEBUG] WARNING: Item {} has invalid filename offset, skipping", i);
+                    }
+                    continue;
+                }
+                
+                // 拼接完整路径：path + filename
+                // Everything 返回的 path 是父目录，filename 是文件名
+                let full_path = if path_part.is_empty() {
+                    filename.clone()
+                } else if filename.is_empty() {
+                    path_part.clone()
+                } else {
+                    // 使用 PathBuf 来正确拼接路径
+                    let path_buf = PathBuf::from(&path_part);
+                    if let Some(joined) = path_buf.join(&filename).to_str() {
+                        joined.to_string()
+                    } else {
+                        // 如果路径包含无效字符，使用简单拼接
+                        format!("{}\\{}", path_part, filename)
+                    }
+                };
+                
+                // 只有当文件名或路径至少有一个有效时才添加结果
+                if !filename.is_empty() || !path_part.is_empty() {
+                    // 性能优化：减少日志输出
+                    // if i < 3 {
+                    //     log_debug!("[DEBUG] Item {}: path_part='{}', filename='{}', full_path='{}'", 
+                    //         i, path_part, filename, full_path);
+                    // }
+                    results.push(full_path);
+                } else {
+                    skipped_count += 1;
+                    // 性能优化：减少日志输出
+                    // if i < 10 {
+                    //     log_debug!("[DEBUG] WARNING: Item {} has empty path and filename, skipping", i);
+                    // }
                 }
             }
 
-            log_debug!("[DEBUG] Total parsed results: {}", results.len());
-            Ok(results)
+            log_debug!("[DEBUG] Parse summary: Total items={}, Parsed={}, Skipped={}, Invalid offsets={}", 
+                items_to_process, results.len(), skipped_count, invalid_offset_count);
+            
+            // 返回四元组：(结果列表, 总条数, 当前页条数, 当前页偏移量)
+            Ok((results, totitems, numitems, offset))
         }
     }
 
@@ -812,11 +906,12 @@ pub mod windows {
     fn send_search_query(
         query: &str,
         max_results: u32,
+        offset: u32,  // 新增参数：分页偏移量
         reply_hwnd: HWND,
         everything_hwnd: HWND,
     ) -> Result<(), EverythingError> {
-        log_debug!("[DEBUG] send_search_query called: query='{}', max_results={}, reply_hwnd={:?}, everything_hwnd={:?}", 
-            query, max_results, reply_hwnd, everything_hwnd);
+        log_debug!("[DEBUG] send_search_query called: query='{}', max_results={}, offset={}, reply_hwnd={:?}, everything_hwnd={:?}", 
+            query, max_results, offset, reply_hwnd, everything_hwnd);
 
         // 将查询字符串转换为 UTF-16（以双 0 结尾）
         let query_wide = wide_string(query);
@@ -844,14 +939,14 @@ pub mod windows {
             (*query_ptr).reply_hwnd = reply_hwnd as u32;  // HWND 转换为 u32
             (*query_ptr).reply_copydata_message = COPYDATA_QUERYCOMPLETE;  // 必须填 0x804E
             (*query_ptr).search_flags = 0; // 默认标志
-            (*query_ptr).reply_offset = 0; // 新增字段，通常填 0
+            (*query_ptr).reply_offset = offset; // 使用传入的 offset 参数
             (*query_ptr).max_results = max_results;
             
             log_debug!("[DEBUG] Query structure filled (Everything 1.4+ QueryW protocol):");
             log_debug!("[DEBUG]   reply_hwnd={:?} (as u32: {}) (offset 0)", reply_hwnd, reply_hwnd as u32);
             log_debug!("[DEBUG]   reply_copydata_message={:08X} (0x804E) (offset 4)", COPYDATA_QUERYCOMPLETE);
             log_debug!("[DEBUG]   search_flags=0 (offset 8)");
-            log_debug!("[DEBUG]   reply_offset=0 (offset 12)");
+            log_debug!("[DEBUG]   reply_offset={} (offset 12)", offset);
             log_debug!("[DEBUG]   max_results={} (offset 16)", max_results);
 
             // 复制查询字符串到结构体后面
@@ -1051,7 +1146,7 @@ pub mod windows {
     }
 
     /// 搜索文件（使用 Everything IPC）
-    pub fn search_files(query: &str, max_results: usize) -> Result<Vec<EverythingResult>, EverythingError> {
+    pub fn search_files(query: &str, max_results: usize) -> Result<EverythingSearchResponse, EverythingError> {
         log_debug!("[DEBUG] ===== search_files called =====");
         log_debug!("[DEBUG] Query: '{}', max_results: {}", query, max_results);
         
@@ -1079,94 +1174,172 @@ pub mod windows {
             })?;
         log_debug!("[DEBUG] IPC handle created successfully, reply_hwnd: {:?}", ipc_handle.reply_hwnd);
 
-        // 发送搜索查询（传递已找到的窗口句柄）
-        log_debug!("[DEBUG] Sending search query...");
-        send_search_query(query, max_results as u32, ipc_handle.reply_hwnd, everything_hwnd)
+        // 分页参数
+        let mut all_results = Vec::new();
+        let mut current_offset = 0;
+        let mut total_count: Option<u32> = None;  // 保存第一次获取的总数
+        // 每次请求的批次大小（建议 2000，太大可能导致 IPC 缓冲区溢出）
+        let batch_size = 2000;
+        let timeout = Duration::from_secs(5);
+        
+        log_debug!("[DEBUG] ===== Starting paginated search loop =====");
+        
+        // 分页循环：直到获取所有结果
+        loop {
+            log_debug!("[DEBUG] Requesting batch: offset={}, batch_size={}", current_offset, batch_size);
+            
+            // 发送查询（带 offset）
+            send_search_query(
+                query,
+                batch_size,
+                current_offset,  // 传入当前偏移
+                ipc_handle.reply_hwnd,
+                everything_hwnd
+            )
             .map_err(|e| {
                 log_debug!("[DEBUG] ERROR: Failed to send search query: {:?}", e);
                 e
             })?;
-        log_debug!("[DEBUG] Search query sent successfully");
-
-        // 等待结果（最多 5 秒）
-        let timeout = Duration::from_secs(5);
-        let start = Instant::now();
-        let mut iteration = 0;
-        
-        log_debug!("[DEBUG] Waiting for results (timeout: {:?})...", timeout);
-        loop {
-            iteration += 1;
-            if iteration % 10 == 0 {
-                log_debug!("[DEBUG] Still waiting for results, elapsed: {:?}", start.elapsed());
+            
+            log_debug!("[DEBUG] Search query sent successfully (offset={})", current_offset);
+            
+            // 等待回复
+            let start = Instant::now();
+            let mut iteration = 0;
+            let mut batch_result: Option<Result<(Vec<String>, u32, u32, u32), EverythingError>> = None;
+            
+            loop {
+                iteration += 1;
+                if iteration % 10 == 0 {
+                    log_debug!("[DEBUG] Still waiting for batch reply, elapsed: {:?}", start.elapsed());
+                }
+                
+                // 处理消息
+                pump_messages(Duration::from_millis(100));
+                
+                // 检查是否有结果
+                match ipc_handle.result_receiver.try_recv() {
+                    Ok(result) => {
+                        batch_result = Some(result);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {
+                        // 继续等待
+                        if start.elapsed() > timeout {
+                            log_debug!("[DEBUG] ERROR: Timeout waiting for batch reply after {:?}", start.elapsed());
+                            return Err(EverythingError::Timeout);
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        log_debug!("[DEBUG] ERROR: Result channel disconnected");
+                        return Err(EverythingError::IpcFailed("通道已断开".to_string()));
+                    }
+                }
             }
             
-            // 处理消息
-            pump_messages(Duration::from_millis(100));
-
-            // 检查是否有结果
-            match ipc_handle.result_receiver.try_recv() {
-                Ok(Ok(paths)) => {
-                    log_debug!("[DEBUG] Received {} paths from Everything IPC", paths.len());
-                    // 转换路径为 EverythingResult
-                    let mut results = Vec::new();
-                    for (idx, path) in paths.iter().enumerate() {
-                        if results.len() >= max_results {
-                            log_debug!("[DEBUG] Reached max_results limit, stopping");
-                            break;
-                        }
-
-                        let path_buf = PathBuf::from(path);
-                        let name = path_buf
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| path.clone());
-
-                        let metadata = std::fs::metadata(path).ok();
-                        let size = metadata.as_ref()
-                            .and_then(|m| if m.is_file() { Some(m.len()) } else { None });
-                        
-                        let date_modified = metadata.as_ref()
-                            .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_secs().to_string());
-
-                        let is_folder = metadata.as_ref().map(|m| m.is_dir());
-
-                        results.push(EverythingResult {
-                            path: path.clone(),
-                            name,
-                            size,
-                            date_modified,
-                            is_folder,
-                        });
-                        
-                        if idx < 5 {
-                            eprintln!("[DEBUG] Processed result {}: {}", idx + 1, path);
-                        }
-                    }
-
-                    log_debug!("[DEBUG] Returning {} results", results.len());
-                    log_debug!("[DEBUG] ===== search_files completed =====");
-                    return Ok(results);
-                }
-                Ok(Err(e)) => {
-                    log_debug!("[DEBUG] ERROR: Received error in result channel: {:?}", e);
+            // 处理批次结果
+            let (batch_paths, tot_items, num_items, reply_offset) = match batch_result {
+                Some(Ok((paths, tot, num, off))) => (paths, tot, num, off),
+                Some(Err(e)) => {
+                    log_debug!("[DEBUG] ERROR: Received error in batch: {:?}", e);
                     return Err(e);
                 }
-                Err(mpsc::TryRecvError::Empty) => {
-                    // 继续等待
-                    if start.elapsed() > timeout {
-                        log_debug!("[DEBUG] ERROR: Timeout waiting for results after {:?}", start.elapsed());
-                        return Err(EverythingError::Timeout);
-                    }
+                None => {
+                    log_debug!("[DEBUG] ERROR: No batch result received");
+                    return Err(EverythingError::Timeout);
                 }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    log_debug!("[DEBUG] ERROR: Result channel disconnected");
-                    return Err(EverythingError::IpcFailed("通道已断开".to_string()));
+            };
+            
+            log_debug!("[DEBUG] Batch received: got {} items (Total in DB: {}, Reply offset: {}, Our offset: {})", 
+                num_items, tot_items, reply_offset, current_offset);
+            
+            // 保存第一次获取的总数
+            if total_count.is_none() {
+                total_count = Some(tot_items);
+                log_debug!("[DEBUG] Total count from Everything: {}", tot_items);
+            }
+            
+            // 转换路径为 EverythingResult
+            for path in batch_paths.iter() {
+                let path_buf = PathBuf::from(path);
+                let name = path_buf
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| path.clone());
+
+                // 性能优化：不查询文件元数据
+                let size = None;
+                let date_modified = None;
+                let is_folder = None;
+
+                all_results.push(EverythingResult {
+                    path: path.clone(),
+                    name,
+                    size,
+                    date_modified,
+                    is_folder,
+                });
+            }
+            
+            // 更新偏移量：始终使用累积的结果数量作为下一次请求的 offset
+            // 这是最可靠的分页方式：第一次请求 offset=0 获取93条，下次请求 offset=93，再下次 offset=186，以此类推
+            // Everything 返回的 reply_offset 是它内部的偏移量，我们不应该依赖它
+            let next_offset = all_results.len() as u32;
+            current_offset = next_offset;
+            
+            log_debug!("[DEBUG] Offset update: accumulated={} results, next_offset={} (Everything returned reply_offset={})", 
+                all_results.len(), next_offset, reply_offset);
+            
+            log_debug!("[DEBUG] Accumulated {} results so far (next offset: {}/{})", 
+                all_results.len(), current_offset, tot_items);
+            
+            // 检查退出条件
+            log_debug!("[DEBUG] Checking exit conditions: accumulated={}, tot_items={}, num_items={}, max_results={}", 
+                all_results.len(), tot_items, num_items, max_results);
+            
+            // 条件1: 达到了用户设定的总最大限制
+            if all_results.len() >= max_results {
+                log_debug!("[DEBUG] EXIT: Reached max_results limit: {} >= {}", all_results.len(), max_results);
+                break;
+            }
+            
+            // 条件2: 已获取所有结果（使用 tot_items 判断）
+            if all_results.len() >= tot_items as usize {
+                log_debug!("[DEBUG] EXIT: All results fetched: {} >= {} (tot_items)", all_results.len(), tot_items);
+                break;
+            }
+            
+            // 条件3: 此次返回 0 条，但还有更多结果需要获取
+            // 如果还有更多结果（accumulated < tot_items），尝试使用累积结果数作为 offset 继续
+            if num_items == 0 {
+                if all_results.len() < tot_items as usize {
+                    log_debug!("[DEBUG] Received 0 items but still need {} more, trying with accumulated count as offset", 
+                        tot_items as usize - all_results.len());
+                    // 尝试使用累积的结果数量作为新的 offset
+                    current_offset = all_results.len() as u32;
+                    log_debug!("[DEBUG] Retrying with offset based on accumulated count: {}", current_offset);
+                    // 继续循环，尝试新的 offset
+                    continue;
+                } else {
+                    log_debug!("[DEBUG] EXIT: Received 0 items and all results fetched, stopping pagination");
+                    break;
                 }
             }
+            
+            // 如果没有退出，继续下一轮循环
+            log_debug!("[DEBUG] Continuing pagination loop: need {} more items (current: {}, target: {})", 
+                tot_items as usize - all_results.len(), all_results.len(), tot_items);
         }
+        
+        log_debug!("[DEBUG] ===== search_files completed: {} total results =====", all_results.len());
+        
+        // 返回结果和总数
+        let total = total_count.unwrap_or(all_results.len() as u32);
+        Ok(EverythingSearchResponse {
+            results: all_results,
+            total_count: total,
+        })
     }
 
     /// 检查 Everything 是否可用

@@ -51,3 +51,8 @@ export interface EverythingResult {
   date_modified?: string;
 }
 
+export interface EverythingSearchResponse {
+  results: EverythingResult[];
+  total_count: number;
+}
+

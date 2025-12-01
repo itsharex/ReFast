@@ -571,14 +571,15 @@ pub fn search_file_history(query: String) -> Result<Vec<file_history::FileHistor
 }
 
 #[tauri::command]
-pub async fn search_everything(query: String) -> Result<Vec<everything_search::EverythingResult>, String> {
+pub async fn search_everything(query: String) -> Result<everything_search::EverythingSearchResponse, String> {
     #[cfg(target_os = "windows")]
     {
         // 在后台线程执行搜索，避免阻塞
         let query_clone = query.clone();
         tokio::task::spawn_blocking(move || {
-            // Limit to 20 results for performance
-            everything_search::windows::search_files(&query_clone, 20)
+            // No limit - request maximum results from Everything
+            // Using u32::MAX would be too large, so use a practical maximum (1 million)
+            everything_search::windows::search_files(&query_clone, 1_000_000)
                 .map_err(|e| e.to_string())
         })
         .await

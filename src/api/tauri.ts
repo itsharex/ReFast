@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { RecordingMeta, AppInfo, FileHistoryItem } from "../types";
+import type { RecordingMeta, AppInfo, FileHistoryItem, EverythingSearchResponse } from "../types";
 
 export const tauriApi = {
   async getRecordingStatus(): Promise<boolean> {
@@ -78,7 +78,7 @@ export const tauriApi = {
     return invoke("get_clipboard_file_path");
   },
 
-  async searchEverything(query: string): Promise<any[]> {
+  async searchEverything(query: string): Promise<EverythingSearchResponse> {
     return invoke("search_everything", { query });
   },
 
