@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { RecordingMeta, AppInfo, FileHistoryItem, EverythingSearchResponse, ShortcutItem } from "../types";
+import type {
+  RecordingMeta,
+  AppInfo,
+  FileHistoryItem,
+  EverythingSearchResponse,
+  ShortcutItem,
+  MemoItem,
+} from "../types";
 
 export const tauriApi = {
   async getRecordingStatus(): Promise<boolean> {
@@ -165,6 +172,35 @@ export const tauriApi = {
 
   async revealInFolder(path: string): Promise<void> {
     return invoke("reveal_in_folder", { path });
+  },
+
+  // Memo APIs
+  async getAllMemos(): Promise<MemoItem[]> {
+    return invoke("get_all_memos");
+  },
+
+  async addMemo(title: string, content: string): Promise<MemoItem> {
+    return invoke("add_memo", { title, content });
+  },
+
+  async updateMemo(
+    id: string,
+    title?: string,
+    content?: string
+  ): Promise<MemoItem> {
+    return invoke("update_memo", { id, title, content });
+  },
+
+  async deleteMemo(id: string): Promise<void> {
+    return invoke("delete_memo", { id });
+  },
+
+  async searchMemos(query: string): Promise<MemoItem[]> {
+    return invoke("search_memos", { query });
+  },
+
+  async showMainWindow(): Promise<void> {
+    return invoke("show_main_window");
   },
 };
 

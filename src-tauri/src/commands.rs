@@ -2,6 +2,7 @@ use crate::app_search;
 use crate::everything_search;
 use crate::file_history;
 use crate::hooks;
+use crate::memos;
 use crate::recording::{RecordingMeta, RecordingState};
 use crate::replay::ReplayState;
 use crate::shortcuts;
@@ -674,6 +675,47 @@ pub fn update_file_history_name(
     let app_data_dir = get_app_data_dir(&app)?;
     file_history::load_history(&app_data_dir)?;
     file_history::update_file_history_name(path, new_name, &app_data_dir)
+}
+
+// ===== Memo commands =====
+
+#[tauri::command]
+pub fn get_all_memos(app: tauri::AppHandle) -> Result<Vec<memos::MemoItem>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    memos::get_all_memos(&app_data_dir)
+}
+
+#[tauri::command]
+pub fn add_memo(
+    title: String,
+    content: String,
+    app: tauri::AppHandle,
+) -> Result<memos::MemoItem, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    memos::add_memo(title, content, &app_data_dir)
+}
+
+#[tauri::command]
+pub fn update_memo(
+    id: String,
+    title: Option<String>,
+    content: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<memos::MemoItem, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    memos::update_memo(id, title, content, &app_data_dir)
+}
+
+#[tauri::command]
+pub fn delete_memo(id: String, app: tauri::AppHandle) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    memos::delete_memo(id, &app_data_dir)
+}
+
+#[tauri::command]
+pub fn search_memos(query: String, app: tauri::AppHandle) -> Result<Vec<memos::MemoItem>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    memos::search_memos(&query, &app_data_dir)
 }
 
 #[tauri::command]
@@ -1714,5 +1756,14 @@ pub async fn show_shortcuts_config(app: tauri::AppHandle) -> Result<(), String> 
     }
 
     println!("[后端] show_shortcuts_config: END");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

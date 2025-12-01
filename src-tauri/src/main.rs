@@ -9,6 +9,7 @@ mod file_history;
 mod hooks;
 mod hotkey;
 mod hotkey_handler;
+mod memos;
 mod recording;
 mod replay;
 mod shortcuts;
@@ -29,12 +30,11 @@ fn main() {
             // Create system tray menu
             let show_launcher =
                 MenuItem::with_id(app, "show_launcher", "显示启动器", true, None::<&str>)?;
-            let show_main = MenuItem::with_id(app, "show_main", "显示主窗口", true, None::<&str>)?;
             let open_logs = MenuItem::with_id(app, "open_logs", "打开日志文件夹", true, None::<&str>)?;
             let restart = MenuItem::with_id(app, "restart", "重启程序", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
 
-            let menu = Menu::with_items(app, &[&show_launcher, &show_main, &open_logs, &restart, &quit])?;
+            let menu = Menu::with_items(app, &[&show_launcher, &open_logs, &restart, &quit])?;
 
             // Create tray icon - use default window icon (which loads from tauri.conf.json)
             let mut tray_builder = TrayIconBuilder::new().menu(&menu).tooltip("ReFast");
@@ -80,12 +80,6 @@ fn main() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show_launcher" => {
                         if let Some(window) = app.get_webview_window("launcher") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "show_main" => {
-                        if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -260,7 +254,13 @@ fn main() {
             get_all_file_history,
             delete_file_history,
             update_file_history_name,
+            get_all_memos,
+            add_memo,
+            update_memo,
+            delete_memo,
+            search_memos,
             show_shortcuts_config,
+            show_main_window,
             open_url,
         ])
         .run(tauri::generate_context!())
