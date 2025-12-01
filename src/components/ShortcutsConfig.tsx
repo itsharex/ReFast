@@ -162,10 +162,57 @@ export function ShortcutsConfig({ onClose }: ShortcutsConfigProps) {
     setEditName("");
   };
 
+  // ESC 键处理：如果在编辑或添加状态，先取消编辑/表单；否则关闭窗口
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.keyCode === 27) {
+        console.log("[前端] ShortcutsConfig: ESC key detected, editingPath:", editingPath, "showAddForm:", showAddForm);
+        
+        // 如果正在编辑，先取消编辑
+        if (editingPath !== null) {
+          console.log("[前端] ShortcutsConfig: Cancelling edit mode");
+          e.preventDefault();
+          e.stopPropagation();
+          cancelEdit();
+          return;
+        }
+        
+        // 如果正在添加表单，先关闭表单
+        if (showAddForm) {
+          console.log("[前端] ShortcutsConfig: Closing add form");
+          e.preventDefault();
+          e.stopPropagation();
+          setShowAddForm(false);
+          setNewName("");
+          setNewPath("");
+          return;
+        }
+        
+        // 否则关闭窗口
+        console.log("[前端] ShortcutsConfig: Closing window");
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+
+    // 使用捕获阶段，确保能够捕获所有 ESC 键事件
+    window.addEventListener("keydown", handleKeyDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingPath, showAddForm]);
+
   return (
     <div
       className="h-full w-full flex flex-col bg-white"
       style={{ minHeight: 0 }}
+      tabIndex={-1}
     >
       {/* Header - Fixed */}
       <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">

@@ -1442,6 +1442,8 @@ pub async fn show_shortcuts_config(app: tauri::AppHandle) -> Result<(), String> 
         println!("[后端] show_shortcuts_config: 窗口已存在，执行显示操作");
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
+        // 设置窗口始终在最前面，确保在主程序窗口前面
+        window.set_always_on_top(true).map_err(|e| e.to_string())?;
         
         // 既然窗口没销毁，前端组件还在，需要通知它刷新数据
         let window_clone = window.clone();
@@ -1469,6 +1471,7 @@ pub async fn show_shortcuts_config(app: tauri::AppHandle) -> Result<(), String> 
         .title("快捷访问配置")
         .inner_size(700.0, 600.0)
         .resizable(true)
+        .always_on_top(true)
         .center()
         .build()
         .map_err(|e| format!("创建窗口失败: {}", e))?;

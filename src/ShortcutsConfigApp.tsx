@@ -11,6 +11,7 @@ function ShortcutsConfigApp() {
     };
   }, []);
 
+
   const handleClose = async () => {
     console.log("[前端] ShortcutsConfigApp: Close button clicked");
     try {
