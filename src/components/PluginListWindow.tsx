@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { plugins } from "../plugins";
 
@@ -6,6 +7,22 @@ export function PluginListWindow() {
     const window = getCurrentWindow();
     await window.close();
   };
+
+  // ESC 键处理
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
+        await handleClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, []);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-gray-50">

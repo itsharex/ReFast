@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tauriApi } from "../api/tauri";
 import type { MemoItem } from "../types";
@@ -11,10 +11,6 @@ export function MemoWindow() {
   const [isEditingMemo, setIsEditingMemo] = useState(false);
   const [isMemoListMode, setIsMemoListMode] = useState(true);
 
-  useEffect(() => {
-    loadMemos();
-  }, []);
-
   const loadMemos = async () => {
     try {
       const list = await tauriApi.getAllMemos();
@@ -24,10 +20,51 @@ export function MemoWindow() {
     }
   };
 
-  const handleClose = async () => {
+  const handleClose = useCallback(async () => {
     const window = getCurrentWindow();
     await window.close();
-  };
+  }, []);
+
+  useEffect(() => {
+    loadMemos();
+  }, []);
+
+  // ESC 键处理
+  useEffect(() => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.keyCode === 27) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (isMemoListMode) {
+          // 列表模式：关闭窗口
+          await handleClose();
+        } else if (isEditingMemo && !selectedMemo) {
+          // 新建模式：返回列表
+          setIsMemoListMode(true);
+          setSelectedMemo(null);
+          setMemoEditTitle("");
+          setMemoEditContent("");
+          setIsEditingMemo(false);
+        } else if (isEditingMemo && selectedMemo) {
+          // 编辑模式：取消编辑
+          setIsEditingMemo(false);
+          setMemoEditTitle(selectedMemo.title);
+          setMemoEditContent(selectedMemo.content);
+        } else {
+          // 详情模式：返回列表
+          setIsMemoListMode(true);
+          setSelectedMemo(null);
+          setIsEditingMemo(false);
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [isMemoListMode, isEditingMemo, selectedMemo, handleClose]);
 
   const resetMemoState = () => {
     setIsMemoListMode(true);
