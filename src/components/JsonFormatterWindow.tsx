@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
@@ -20,6 +20,7 @@ export function JsonFormatterWindow() {
   const [error, setError] = useState<string | null>(null);
   const [indent, setIndent] = useState(2);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const shouldPreserveExpandedRef = useRef(false);
 
   // 监听来自启动器的 JSON 内容设置事件
   useEffect(() => {
@@ -62,6 +63,38 @@ export function JsonFormatterWindow() {
       }
     };
   }, [indent]);
+
+  // 实时格式化：监听 input 变化
+  useEffect(() => {
+    if (!input.trim()) {
+      setFormatted("");
+      setParsedData(null);
+      setError(null);
+      setExpandedPaths(new Set());
+      shouldPreserveExpandedRef.current = false;
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(input);
+      const formattedJson = JSON.stringify(parsed, null, indent);
+      setFormatted(formattedJson);
+      setParsedData(parsed);
+      setError(null);
+      
+      // 实时格式化时，如果是第一次格式化，展开所有
+      // 如果用户已经手动调整了展开状态，尽量保持
+      if (!shouldPreserveExpandedRef.current) {
+        const allPaths = getAllPaths(parsed, "");
+        setExpandedPaths(new Set(allPaths));
+      }
+    } catch (e) {
+      const errorMessage = e instanceof Error ? e.message : "JSON 格式错误";
+      setError(errorMessage);
+      setFormatted("");
+      setParsedData(null);
+    }
+  }, [input, indent]);
 
   // 格式化 JSON
   const handleFormat = () => {
@@ -118,6 +151,7 @@ export function JsonFormatterWindow() {
 
   // 切换展开/折叠
   const toggleExpand = (path: string) => {
+    shouldPreserveExpandedRef.current = true; // 标记用户已手动调整展开状态
     setExpandedPaths((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(path)) {
@@ -131,6 +165,7 @@ export function JsonFormatterWindow() {
 
   // 展开所有
   const expandAll = () => {
+    shouldPreserveExpandedRef.current = true; // 标记用户已手动调整展开状态
     if (parsedData) {
       const allPaths = getAllPaths(parsedData, "");
       setExpandedPaths(new Set(allPaths));
@@ -139,6 +174,7 @@ export function JsonFormatterWindow() {
 
   // 折叠所有
   const collapseAll = () => {
+    shouldPreserveExpandedRef.current = true; // 标记用户已手动调整展开状态
     setExpandedPaths(new Set());
   };
 
@@ -208,23 +244,23 @@ export function JsonFormatterWindow() {
   };
 
   // 渲染 JSON 值
-  const renderJsonValue = (value: JsonValue, path: string, key: string = ""): JSX.Element => {
+  const renderJsonValue = (value: JsonValue, path: string, key: string = "", showComma: boolean = false): JSX.Element => {
     const isExpanded = expandedPaths.has(path);
     
     if (value === null) {
-      return <span style={{ color: "#6b7280" }}>null</span>;
+      return <span style={{ color: "#6b7280" }}>null{showComma && <span style={{ color: "#6b7280" }}>,</span>}</span>;
     }
     
     if (typeof value === "boolean") {
-      return <span style={{ color: "#8b5cf6" }}>{value.toString()}</span>;
+      return <span style={{ color: "#8b5cf6" }}>{value.toString()}{showComma && <span style={{ color: "#6b7280" }}>,</span>}</span>;
     }
     
     if (typeof value === "number") {
-      return <span style={{ color: "#059669" }}>{value}</span>;
+      return <span style={{ color: "#059669" }}>{value}{showComma && <span style={{ color: "#6b7280" }}>,</span>}</span>;
     }
     
     if (typeof value === "string") {
-      return <span style={{ color: "#dc2626" }}>"{value}"</span>;
+      return <span style={{ color: "#dc2626" }}>"{value}"{showComma && <span style={{ color: "#6b7280" }}>,</span>}</span>;
     }
     
     if (Array.isArray(value)) {
@@ -249,11 +285,11 @@ export function JsonFormatterWindow() {
                 <div style={{ marginLeft: "20px" }}>
                   {value.map((item, index) => {
                     const itemPath = `${path}[${index}]`;
+                    const isLast = index === value.length - 1;
                     return (
                       <div key={index} style={{ marginTop: "4px" }}>
                         <span style={{ color: "#6b7280" }}>{index}: </span>
-                        {renderJsonValue(item, itemPath)}
-                        {index < value.length - 1 && <span style={{ color: "#6b7280" }}>,</span>}
+                        {renderJsonValue(item, itemPath, "", !isLast)}
                       </div>
                     );
                   })}
@@ -264,17 +300,18 @@ export function JsonFormatterWindow() {
                   {value.length} items
                 </span>
               )}
-              <span
-                onClick={() => toggleExpand(path)}
-                style={{
-                  cursor: "pointer",
-                  userSelect: "none",
-                  color: "#3b82f6",
-                  marginLeft: isExpanded ? "0" : "4px",
-                }}
-              >
-                {isExpanded && "]"}
-              </span>
+              {isExpanded && (
+                <span
+                  onClick={() => toggleExpand(path)}
+                  style={{
+                    cursor: "pointer",
+                    userSelect: "none",
+                    color: "#3b82f6",
+                  }}
+                >
+                  ]{showComma && <span style={{ color: "#6b7280" }}>,</span>}
+                </span>
+              )}
             </>
           )}
         </div>
@@ -287,7 +324,7 @@ export function JsonFormatterWindow() {
       const isEmpty = keys.length === 0;
       
       return (
-        <div>
+        <div style={{ display: "inline-block", verticalAlign: "top" }}>
           <span
             onClick={() => toggleExpand(path)}
             style={{
@@ -306,12 +343,13 @@ export function JsonFormatterWindow() {
                 <div style={{ marginLeft: "20px" }}>
                   {keys.map((k, index) => {
                     const itemPath = path ? `${path}.${k}` : k;
+                    const isLast = index === keys.length - 1;
                     return (
-                      <div key={k} style={{ marginTop: "4px" }}>
-                        <span style={{ color: "#059669" }}>"{k}"</span>
-                        <span style={{ color: "#6b7280" }}>: </span>
-                        {renderJsonValue(obj[k], itemPath, k)}
-                        {index < keys.length - 1 && <span style={{ color: "#6b7280" }}>,</span>}
+                      <div key={k} style={{ marginTop: "4px", display: "flex", alignItems: "flex-start" }}>
+                        <span style={{ color: "#059669", marginRight: "4px" }}>"{k}":</span>
+                        <div style={{ flex: 1 }}>
+                          {renderJsonValue(obj[k], itemPath, k, !isLast)}
+                        </div>
                       </div>
                     );
                   })}
@@ -322,17 +360,18 @@ export function JsonFormatterWindow() {
                   {keys.length} keys
                 </span>
               )}
-              <span
-                onClick={() => toggleExpand(path)}
-                style={{
-                  cursor: "pointer",
-                  userSelect: "none",
-                  color: "#3b82f6",
-                  marginLeft: isExpanded ? "0" : "4px",
-                }}
-              >
-                {isExpanded && "}"}
-              </span>
+              {isExpanded && (
+                <span
+                  onClick={() => toggleExpand(path)}
+                  style={{
+                    cursor: "pointer",
+                    userSelect: "none",
+                    color: "#3b82f6",
+                  }}
+                >
+                  {"}"}
+                </span>
+              )}
             </>
           )}
         </div>
