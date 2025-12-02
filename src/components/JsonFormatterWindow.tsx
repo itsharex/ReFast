@@ -111,7 +111,8 @@ export function JsonFormatterWindow() {
       setFormatted(formattedJson);
       setParsedData(parsed);
       setError(null);
-      // 默认展开所有节点
+      // 格式化时展开所有节点
+      shouldPreserveExpandedRef.current = true;
       const allPaths = getAllPaths(parsed, "");
       setExpandedPaths(new Set(allPaths));
     } catch (e) {
@@ -191,11 +192,10 @@ export function JsonFormatterWindow() {
       const parsed = JSON.parse(input);
       const minified = JSON.stringify(parsed);
       setFormatted(minified);
-      setParsedData(parsed);
+      // 压缩模式下不显示树形视图，只显示文本
+      setParsedData(null);
       setError(null);
-      // 压缩模式下也展开所有节点
-      const allPaths = getAllPaths(parsed, "");
-      setExpandedPaths(new Set(allPaths));
+      setExpandedPaths(new Set());
     } catch (e) {
       const errorMessage = e instanceof Error ? e.message : "JSON 格式错误";
       setError(errorMessage);
@@ -223,10 +223,15 @@ export function JsonFormatterWindow() {
 
   // 复制到剪贴板
   const handleCopy = async () => {
-    if (!formatted) return;
+    // 如果有解析的数据，复制格式化后的文本；否则复制 formatted
+    const textToCopy = parsedData 
+      ? JSON.stringify(parsedData, null, indent)
+      : formatted;
+    
+    if (!textToCopy) return;
 
     try {
-      await navigator.clipboard.writeText(formatted);
+      await navigator.clipboard.writeText(textToCopy);
       alert("已复制到剪贴板");
     } catch (e) {
       console.error("复制失败:", e);
@@ -241,6 +246,7 @@ export function JsonFormatterWindow() {
     setParsedData(null);
     setError(null);
     setExpandedPaths(new Set());
+    shouldPreserveExpandedRef.current = false;
   };
 
   // 渲染 JSON 值
@@ -530,24 +536,24 @@ export function JsonFormatterWindow() {
         </button>
         <button
           onClick={handleCopy}
-          disabled={!formatted}
+          disabled={!formatted && !parsedData}
           style={{
             padding: "8px 16px",
-            backgroundColor: formatted ? "#6366f1" : "#9ca3af",
+            backgroundColor: (formatted || parsedData) ? "#6366f1" : "#9ca3af",
             color: "white",
             border: "none",
             borderRadius: "6px",
-            cursor: formatted ? "pointer" : "not-allowed",
+            cursor: (formatted || parsedData) ? "pointer" : "not-allowed",
             fontSize: "14px",
             fontWeight: 500,
           }}
           onMouseOver={(e) => {
-            if (formatted) {
+            if (formatted || parsedData) {
               e.currentTarget.style.backgroundColor = "#4f46e5";
             }
           }}
           onMouseOut={(e) => {
-            if (formatted) {
+            if (formatted || parsedData) {
               e.currentTarget.style.backgroundColor = "#6366f1";
             }
           }}
