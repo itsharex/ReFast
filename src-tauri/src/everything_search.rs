@@ -1224,237 +1224,144 @@ pub mod windows {
             e
         })?;
 
-        // 分页参数
-        let mut all_results = Vec::new();
-        let mut current_offset = 0;
-        let mut total_count: Option<u32> = None; // 保存第一次获取的总数
-                                                 // 每次请求的批次大小（建议 2000，太大可能导致 IPC 缓冲区溢出）
-        let batch_size = 2000;
+        // 只查询一次，请求 max_results 条结果
         let timeout = Duration::from_secs(5);
+        
+        log_debug!(
+            "[DEBUG] Requesting single query: max_results={}",
+            max_results
+        );
 
-        // 分页循环：直到获取所有结果
-        let mut batch_count = 0;
+        // 检查是否被取消
+        if let Some(cancel_flag) = cancelled {
+            if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                log_debug!("[DEBUG] Search cancelled by user");
+                return Err(EverythingError::Other("搜索已取消".to_string()));
+            }
+        }
+
+        // 发送查询（offset=0，请求 max_results 条）
+        send_search_query(
+            query,
+            max_results as u32,
+            0, // offset = 0，只查询一次
+            ipc_handle.reply_hwnd,
+            everything_hwnd,
+        )
+        .map_err(|e| {
+            log_debug!("[DEBUG] ERROR: Failed to send search query: {:?}", e);
+            e
+        })?;
+
+        log_debug!("[DEBUG] Search query sent successfully");
+
+        // 等待回复
+        let start = Instant::now();
+        let mut iteration = 0;
+        let mut batch_result: Option<Result<(Vec<String>, u32, u32, u32), EverythingError>> =
+            None;
+
         loop {
             // 检查是否被取消
             if let Some(cancel_flag) = cancelled {
                 if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    log_debug!("[DEBUG] Search cancelled by user");
+                    log_debug!("[DEBUG] Search cancelled while waiting for reply");
                     return Err(EverythingError::Other("搜索已取消".to_string()));
                 }
             }
             
-            batch_count += 1;
-            
-            // 每100批次或每10万条记录输出一次进度，减少日志噪音
-            // 第一次循环总是输出，让用户知道搜索开始了
-            let should_log_detail = batch_count == 1 || batch_count % 100 == 0 || (current_offset > 0 && current_offset % 100_000 == 0);
-            
-            if should_log_detail {
+            iteration += 1;
+            if iteration % 10 == 0 {
                 log_debug!(
-                    "[DEBUG] Requesting batch #{}: offset={}, batch_size={}",
-                    batch_count,
-                    current_offset,
-                    batch_size
+                    "[DEBUG] Still waiting for reply, elapsed: {:?}",
+                    start.elapsed()
                 );
             }
 
-            // 发送查询（带 offset）
-            send_search_query(
-                query,
-                batch_size,
-                current_offset, // 传入当前偏移
-                ipc_handle.reply_hwnd,
-                everything_hwnd,
-            )
-            .map_err(|e| {
-                log_debug!("[DEBUG] ERROR: Failed to send search query: {:?}", e);
-                e
-            })?;
+            // 处理消息
+            pump_messages(Duration::from_millis(100));
 
-            if should_log_detail {
-                log_debug!(
-                    "[DEBUG] Search query sent successfully (offset={})",
-                    current_offset
-                );
-            }
-
-            // 等待回复
-            let start = Instant::now();
-            let mut iteration = 0;
-            let mut batch_result: Option<Result<(Vec<String>, u32, u32, u32), EverythingError>> =
-                None;
-
-            loop {
-                // 检查是否被取消
-                if let Some(cancel_flag) = cancelled {
-                    if cancel_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        log_debug!("[DEBUG] Search cancelled while waiting for batch reply");
-                        return Err(EverythingError::Other("搜索已取消".to_string()));
-                    }
-                }
-                
-                iteration += 1;
-                if iteration % 10 == 0 {
-                    log_debug!(
-                        "[DEBUG] Still waiting for batch reply, elapsed: {:?}",
-                        start.elapsed()
-                    );
-                }
-
-                // 处理消息
-                pump_messages(Duration::from_millis(100));
-
-                // 检查是否有结果
-                match ipc_handle.result_receiver.try_recv() {
-                    Ok(result) => {
-                        batch_result = Some(result);
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        // 继续等待
-                        if start.elapsed() > timeout {
-                            log_debug!(
-                                "[DEBUG] ERROR: Timeout waiting for batch reply after {:?}",
-                                start.elapsed()
-                            );
-                            return Err(EverythingError::Timeout);
-                        }
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        log_debug!("[DEBUG] ERROR: Result channel disconnected");
-                        return Err(EverythingError::IpcFailed("通道已断开".to_string()));
-                    }
-                }
-            }
-
-            // 处理批次结果
-            let (batch_paths, tot_items, num_items, reply_offset) = match batch_result {
-                Some(Ok((paths, tot, num, off))) => (paths, tot, num, off),
-                Some(Err(e)) => {
-                    log_debug!("[DEBUG] ERROR: Received error in batch: {:?}", e);
-                    return Err(e);
-                }
-                None => {
-                    log_debug!("[DEBUG] ERROR: No batch result received");
-                    return Err(EverythingError::Timeout);
-                }
-            };
-
-            // 保存第一次获取的总数
-            if total_count.is_none() {
-                total_count = Some(tot_items);
-            }
-
-            // 转换路径为 EverythingResult
-            let mut batch_results = Vec::new();
-            for path in batch_paths.iter() {
-                let path_buf = PathBuf::from(path);
-                let name = path_buf
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| path.clone());
-
-                // 性能优化：不查询文件元数据，但可以从 Everything 返回的 flags 推断是否为文件夹/驱动器
-                let size = None;
-                let date_modified = None;
-                // Everything 将文件夹、驱动器和根目录都视为“目录”类型
-                // 这里我们仅根据路径简单判断：如果没有扩展名且以路径分隔符结尾的可能性较高，
-                // 但更可靠的方式是依赖 flags，因此在构造 batch_paths 时一起返回 flags。
-                // 为了兼容当前实现且避免大量重构，这里仅根据路径是否有扩展名做一个近似判断。
-                let is_folder = match path_buf.extension() {
-                    Some(_) => Some(false),
-                    None => Some(true),
-                };
-
-                let result = EverythingResult {
-                    path: path.clone(),
-                    name,
-                    size,
-                    date_modified,
-                    is_folder,
-                };
-                
-                batch_results.push(result.clone());
-                all_results.push(result);
-            }
-            
-            // 调用批次回调，实时发送结果
-            if let Some(ref mut callback) = on_batch {
-                let total = total_count.unwrap_or(tot_items);
-                callback(&batch_results, total, all_results.len() as u32);
-            }
-
-            // 更新偏移量：始终使用累积的结果数量作为下一次请求的 offset
-            // 这是最可靠的分页方式：第一次请求 offset=0 获取93条，下次请求 offset=93，再下次 offset=186，以此类推
-            // Everything 返回的 reply_offset 是它内部的偏移量，我们不应该依赖它
-            let next_offset = all_results.len() as u32;
-            current_offset = next_offset;
-
-            // 检查退出条件
-            // 条件1: 达到了用户设定的总最大限制
-            if all_results.len() >= max_results {
-                break;
-            }
-
-            // 条件2: 已获取所有结果（使用 tot_items 判断）
-            if all_results.len() >= tot_items as usize {
-                break;
-            }
-
-            // 条件3: 此次返回 0 条，但还有更多结果需要获取
-            // 如果还有更多结果（accumulated < tot_items），尝试使用累积结果数作为 offset 继续
-            if num_items == 0 {
-                if all_results.len() < tot_items as usize {
-                    // 尝试使用累积的结果数量作为新的 offset
-                    current_offset = all_results.len() as u32;
-                    // 继续循环，尝试新的 offset
-                    continue;
-                } else {
-                    log_debug!("[DEBUG] EXIT: Received 0 items and all results fetched, stopping pagination");
+            // 检查是否有结果
+            match ipc_handle.result_receiver.try_recv() {
+                Ok(result) => {
+                    batch_result = Some(result);
                     break;
                 }
-            }
-
-            // 如果没有退出，继续下一轮循环
-            // 只在每100批次或每10万条记录时输出进度，减少日志噪音
-            if should_log_detail {
-                let remaining = (tot_items as usize).saturating_sub(all_results.len());
-                let max_remaining = (max_results as usize).saturating_sub(all_results.len());
-                let actual_remaining = remaining.min(max_remaining);
-                log_debug!(
-                    "[DEBUG] Progress: {}/{} items ({}%), batch #{}, remaining: {}",
-                    all_results.len(),
-                    tot_items.min(max_results as u32),
-                    (all_results.len() * 100 / tot_items.min(max_results as u32) as usize),
-                    batch_count,
-                    actual_remaining
-                );
+                Err(mpsc::TryRecvError::Empty) => {
+                    // 继续等待
+                    if start.elapsed() > timeout {
+                        log_debug!(
+                            "[DEBUG] ERROR: Timeout waiting for reply after {:?}",
+                            start.elapsed()
+                        );
+                        return Err(EverythingError::Timeout);
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    log_debug!("[DEBUG] ERROR: Result channel disconnected");
+                    return Err(EverythingError::IpcFailed("通道已断开".to_string()));
+                }
             }
         }
 
-        // 额外输出一次最终进度日志，明确已经到 100%
-        if let Some(tot) = total_count {
-            let effective_total = tot.min(max_results as u32);
-            log_debug!(
-                "[DEBUG] Final progress: {}/{} items ({}%), total batches: {}",
-                all_results.len(),
-                effective_total,
-                (all_results.len() * 100 / effective_total as usize),
-                batch_count
-            );
+        // 处理结果
+        let (batch_paths, tot_items, num_items, _reply_offset) = match batch_result {
+            Some(Ok((paths, tot, num, off))) => (paths, tot, num, off),
+            Some(Err(e)) => {
+                log_debug!("[DEBUG] ERROR: Received error: {:?}", e);
+                return Err(e);
+            }
+            None => {
+                log_debug!("[DEBUG] ERROR: No result received");
+                return Err(EverythingError::Timeout);
+            }
+        };
+
+        // 转换路径为 EverythingResult，限制为 max_results 条
+        let mut all_results = Vec::new();
+        for path in batch_paths.iter().take(max_results) {
+            let path_buf = PathBuf::from(path);
+            let name = path_buf
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| path.clone());
+
+            // 性能优化：不查询文件元数据
+            let size = None;
+            let date_modified = None;
+            let is_folder = match path_buf.extension() {
+                Some(_) => Some(false),
+                None => Some(true),
+            };
+
+            let result = EverythingResult {
+                path: path.clone(),
+                name,
+                size,
+                date_modified,
+                is_folder,
+            };
+            
+            all_results.push(result);
+        }
+        
+        // 调用批次回调，发送结果
+        if let Some(ref mut callback) = on_batch {
+            callback(&all_results, tot_items, all_results.len() as u32);
         }
 
         log_debug!(
-            "[DEBUG] ===== search_files completed: {} total results =====",
-            all_results.len()
+            "[DEBUG] ===== search_files completed: {} total results (Everything found {} total) =====",
+            all_results.len(),
+            tot_items
         );
 
         // 返回结果和总数
-        let total = total_count.unwrap_or(all_results.len() as u32);
+        // total_count 使用 Everything 找到的总数，但实际返回的结果数限制为 max_results
         Ok(EverythingSearchResponse {
             results: all_results,
-            total_count: total,
+            total_count: tot_items,
         })
     }
 

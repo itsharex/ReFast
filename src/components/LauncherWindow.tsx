@@ -29,10 +29,6 @@ export function LauncherWindow() {
   const [everythingResults, setEverythingResults] = useState<EverythingResult[]>([]);
   const [everythingTotalCount, setEverythingTotalCount] = useState<number | null>(null);
   const [everythingCurrentCount, setEverythingCurrentCount] = useState<number>(0); // 当前已加载的数量
-  const [displayedResultsCount, setDisplayedResultsCount] = useState<number>(500); // 当前显示的结果数量
-  
-  // 限制显示的结果数量，避免 DOM 节点过多导致卡顿
-  const MAX_DISPLAY_RESULTS = 500; // 每次加载 500 条结果
   const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
   const [everythingPath, setEverythingPath] = useState<string | null>(null);
   const [everythingVersion, setEverythingVersion] = useState<string | null>(null);
@@ -463,7 +459,6 @@ export function LauncherWindow() {
       setEverythingResults([]);
       setEverythingTotalCount(null);
       setEverythingCurrentCount(0);
-      setDisplayedResultsCount(MAX_DISPLAY_RESULTS); // 重置显示数量
       setDetectedUrls([]);
       setResults([]);
       setSelectedIndex(0);
@@ -548,8 +543,8 @@ export function LauncherWindow() {
         displayName: plugin.name,
         path: plugin.id,
       })),
-      // 限制 Everything 结果显示数量，支持滚动加载更多
-      ...everythingResults.slice(0, displayedResultsCount).map((everything) => ({
+      // 显示所有 Everything 结果
+      ...everythingResults.map((everything) => ({
         type: "everything" as const,
         everything,
         displayName: everything.name,
@@ -568,7 +563,7 @@ export function LauncherWindow() {
     
     // URLs always come first, then other results sorted by open history
     return [...urlResults, ...otherResults];
-  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, everythingResults, detectedUrls, displayedResultsCount, openHistory]);
+  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, everythingResults, detectedUrls, openHistory]);
 
   useEffect(() => {
     // 保存当前滚动位置（如果需要保持）
@@ -765,36 +760,20 @@ export function LauncherWindow() {
         setEverythingTotalCount(total_count);
         setEverythingCurrentCount(current_count);
 
-        // 累积批次结果，实现真正的流式展示
+        // 累积批次结果，实现流式展示
+        // 注意：total_count 是 Everything 找到的总数，可能远大于后端实际返回的结果数（500）
+        // 所以这里不限制累积数量，最终结果会在 searchEverything 的最终响应中覆盖
         setEverythingResults((prev) => {
-          // 如果之前已经有完整结果，忽略后续批次
-          if (prev.length >= total_count) {
-            return prev;
-          }
-
           // 如果这是新搜索的第一批（prev.length === 0），直接用这一批
           if (prev.length === 0) {
             return batchResults.slice(); // 拷贝一份
           }
 
           // 按顺序追加当前批次结果
-          const next = [...prev, ...batchResults];
-
-          // 防止理论误差：如果长度超过 total_count，则截断
-          if (next.length > total_count) {
-            return next.slice(0, total_count);
-          }
-
-          return next;
+          // 不限制数量，因为最终结果会在 searchEverything 的最终响应中覆盖
+          return [...prev, ...batchResults];
         });
 
-        // 如果当前显示数量还没初始化，按已加载数量和上限初始化
-        setDisplayedResultsCount((prev) => {
-          if (prev === 0) {
-            return Math.min(current_count, MAX_DISPLAY_RESULTS);
-          }
-          return prev;
-        });
       });
 
       unlistenFn = unlisten;
@@ -814,7 +793,6 @@ export function LauncherWindow() {
       setEverythingResults([]);
       setEverythingTotalCount(null);
       setEverythingCurrentCount(0);
-      setDisplayedResultsCount(0);
       setIsSearchingEverything(false);
       return;
     }
@@ -832,7 +810,6 @@ export function LauncherWindow() {
     setEverythingResults([]);
     setEverythingTotalCount(null);
     setEverythingCurrentCount(0);
-    setDisplayedResultsCount(0);
     setIsSearchingEverything(true);
     
     // 标记：最终结果尚未设置，仅用于后面做校验日志
@@ -848,36 +825,23 @@ export function LauncherWindow() {
         return;
       }
       
-      // 只做校验：比较批次累积结果与最终结果是否一致
+      // 使用最终结果覆盖批次累积的结果，确保结果数量准确
       console.log(
-        "[最终结果校验] Everything search results (final):",
+        "[最终结果] Everything search results (final):",
         response.results.length,
-        "results found (total:",
+        "results found (total_count:",
         response.total_count,
-        "), 当前前端 everythingResults.length=",
+        "), 批次累积结果数=",
         everythingResults.length
       );
       
+      // 用最终结果覆盖批次累积的结果，因为最终结果才是后端实际返回的准确结果
+      // 批次事件中的 total_count 是 Everything 找到的总数，可能远大于后端实际返回的结果数
+      setEverythingResults(response.results);
+      setEverythingTotalCount(response.total_count);
+      setEverythingCurrentCount(response.results.length);
+      
       finalResultsSetRef.current = true;
-      
-      if (everythingResults.length !== response.total_count) {
-        console.warn(
-          "[最终结果校验] 累积结果条数与后端 total_count 不一致，累积=",
-          everythingResults.length,
-          " total_count=",
-          response.total_count,
-          "（为避免闪烁，暂不强制覆盖，仅输出警告）"
-        );
-      }
-      
-      // 如果此时还没有设置显示数量（例如非常快的搜索），初始化一次
-      setDisplayedResultsCount((prev) => {
-        if (prev === 0) {
-          const total = response.total_count ?? everythingResults.length;
-          return Math.min(total, MAX_DISPLAY_RESULTS);
-        }
-        return prev;
-      });
     } catch (error) {
       if (currentSearchRef.current?.cancelled || currentSearchRef.current?.query !== searchQuery) {
         console.log("Search was cancelled, ignoring error");
@@ -888,7 +852,6 @@ export function LauncherWindow() {
       setEverythingResults([]);
       setEverythingTotalCount(null);
       setEverythingCurrentCount(0);
-      setDisplayedResultsCount(0);
       
       // 失败时重查状态
       const errorStr = typeof error === 'string' ? error : String(error);
@@ -1545,41 +1508,6 @@ export function LauncherWindow() {
             <div
               ref={listRef}
               className="max-h-96 overflow-y-auto"
-              onScroll={(e) => {
-                const target = e.currentTarget;
-                const scrollTop = target.scrollTop;
-                const scrollHeight = target.scrollHeight;
-                const clientHeight = target.clientHeight;
-                
-                // 检测是否滚动到底部（距离底部 50px 内）
-                const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
-                
-                if (isNearBottom) {
-                  // 检查是否有更多 Everything 结果可以加载
-                  // 使用 everythingTotalCount 判断总数，而不是依赖当前数组长度，避免中间状态导致无法继续加载
-                  const totalCount = everythingTotalCount ?? everythingResults.length;
-                  const hasMoreEverythingResults = totalCount > displayedResultsCount;
-                  
-                  console.log(`[滚动加载] 检查加载更多: totalCount=${totalCount}, displayedResultsCount=${displayedResultsCount}, everythingResults.length=${everythingResults.length}, hasMore=${hasMoreEverythingResults}`);
-                  
-                  if (hasMoreEverythingResults) {
-                    // 标记需要保持滚动位置
-                    shouldPreserveScrollRef.current = true;
-                    
-                    // 加载更多结果（每次增加 500 条）
-                    setDisplayedResultsCount((prev) => {
-                      const next = prev + MAX_DISPLAY_RESULTS;
-                      // 使用 totalCount 和 everythingResults.length 的最小值，确保不超过实际结果数
-                      const maxCount = Math.min(totalCount, everythingResults.length || totalCount);
-                      const actualNext = Math.min(next, maxCount);
-                      console.log(`[滚动加载] 加载更多: ${prev} -> ${actualNext} (max: ${maxCount}, totalCount: ${totalCount}, everythingResults.length: ${everythingResults.length})`);
-                      return actualNext;
-                    });
-                  } else {
-                    console.log(`[滚动加载] 没有更多结果可加载: totalCount=${totalCount}, displayedResultsCount=${displayedResultsCount}`);
-                  }
-                }
-              }}
             >
               {results.map((result, index) => (
                 <div
@@ -1829,23 +1757,6 @@ export function LauncherWindow() {
                   </div>
                 </div>
               ))}
-              
-              {/* 加载更多提示 - 只在有 Everything 结果且未全部显示时显示 */}
-              {everythingResults.length > 0 && everythingResults.length > displayedResultsCount && (
-                <div className="px-6 py-4 text-center text-gray-500 text-sm border-t border-gray-100 bg-gray-50">
-                  <div className="flex items-center justify-center gap-2">
-                    <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                    <span>
-                      已显示 {displayedResultsCount.toLocaleString()} / {everythingResults.length.toLocaleString()} 条 Everything 结果
-                    </span>
-                  </div>
-                  <div className="mt-1 text-xs text-gray-400">
-                    滚动到底部自动加载更多（每次 {MAX_DISPLAY_RESULTS.toLocaleString()} 条）
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -1881,9 +1792,9 @@ export function LauncherWindow() {
                         </svg>
                         <span>
                           Everything: {everythingTotalCount !== null 
-                            ? `找到 ${everythingTotalCount.toLocaleString()} 个结果${everythingTotalCount > displayedResultsCount ? ` (显示 ${displayedResultsCount.toLocaleString()} 条)` : ''}` 
+                            ? `找到 ${everythingTotalCount.toLocaleString()} 个结果` 
                             : everythingResults.length > 0
-                            ? `找到 ${everythingResults.length.toLocaleString()} 个结果${everythingResults.length > displayedResultsCount ? ` (显示 ${displayedResultsCount.toLocaleString()} 条)` : ''}`
+                            ? `找到 ${everythingResults.length.toLocaleString()} 个结果`
                             : "无结果"}
                         </span>
                       </>

@@ -777,11 +777,10 @@ pub async fn search_everything(
                 });
             };
 
-            // No limit - request maximum results from Everything
-            // Using u32::MAX would be too large, so use a practical maximum (1 million)
+            // Request maximum 500 results from Everything
             let resp = everything_search::windows::search_files(
                 &query_clone,
-                1_000_000,
+                500,
                 Some(&cancel_flag),
                 Some(on_batch),
             )
