@@ -138,9 +138,6 @@ export const tauriApi = {
     return invoke("download_everything");
   },
 
-  async downloadEsExe(): Promise<string> {
-    return invoke("download_es_exe");
-  },
 
   async startEverything(): Promise<void> {
     return invoke("start_everything");

@@ -457,7 +457,6 @@ fn main() {
             start_everything,
             open_everything_download,
             download_everything,
-            download_es_exe,
             launch_file,
             check_path_exists,
             get_clipboard_file_path,

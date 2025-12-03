@@ -40,10 +40,6 @@ export function LauncherWindow() {
   const [everythingVersion, setEverythingVersion] = useState<string | null>(null);
   const [everythingError, setEverythingError] = useState<string | null>(null);
   const [isSearchingEverything, setIsSearchingEverything] = useState(false);
-  const [showDownloadModal, setShowDownloadModal] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [downloadedPath, setDownloadedPath] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -203,70 +199,6 @@ export function LauncherWindow() {
     loadOpenHistory();
   }, []);
 
-  // Listen for download progress events
-  useEffect(() => {
-    if (!isDownloading) return;
-
-    let unlistenFn1: (() => void) | null = null;
-    let unlistenFn2: (() => void) | null = null;
-    
-    const setupProgressListener = async () => {
-      const unlisten1 = await listen<number>("everything-download-progress", (event) => {
-        setDownloadProgress(event.payload);
-      });
-      unlistenFn1 = unlisten1;
-      
-      const unlisten2 = await listen<number>("es-download-progress", (event) => {
-        setDownloadProgress(event.payload);
-      });
-      unlistenFn2 = unlisten2;
-    };
-
-    setupProgressListener();
-
-    return () => {
-      if (unlistenFn1) {
-        unlistenFn1();
-      }
-      if (unlistenFn2) {
-        unlistenFn2();
-      }
-    };
-  }, [isDownloading]);
-
-  // Adjust window size when download modal is shown
-  useEffect(() => {
-    if (!showDownloadModal) return;
-
-    const adjustWindowForModal = () => {
-      const window = getCurrentWindow();
-      
-      // Use saved window width
-      const targetWidth = windowWidth;
-      
-      // Find the modal element and calculate its actual height
-      const modalElement = document.querySelector('[class*="bg-white"][class*="rounded-lg"][class*="shadow-xl"]');
-      if (modalElement) {
-        const modalRect = modalElement.getBoundingClientRect();
-        const modalHeight = modalRect.height;
-        // Add padding for margins (my-4 = 16px top + 16px bottom = 32px)
-        const requiredHeight = modalHeight + 32;
-        
-        window.setSize(new LogicalSize(targetWidth, requiredHeight)).catch(console.error);
-      } else {
-        // Fallback: use estimated height
-        const estimatedHeight = 450;
-        window.setSize(new LogicalSize(targetWidth, estimatedHeight)).catch(console.error);
-      }
-    };
-
-    // Wait for modal to render, use double requestAnimationFrame for accurate measurement
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        setTimeout(adjustWindowForModal, 50);
-      });
-    });
-  }, [showDownloadModal, isDownloading, downloadedPath]);
 
   // Adjust window size when memo modal is shown
   useEffect(() => {
@@ -1066,7 +998,7 @@ export function LauncherWindow() {
     // 使用节流优化窗口大小调整，避免频繁调用导致卡顿
     // 如果正在保持滚动位置，延迟窗口大小调整，让滚动位置先恢复
     // 如果备忘录模态框打开，不在这里调整窗口大小（由专门的 useEffect 处理）
-    if (isMemoModalOpen || showDownloadModal) {
+    if (isMemoModalOpen) {
       return;
     }
     
@@ -1075,7 +1007,7 @@ export function LauncherWindow() {
       const adjustWindowSize = () => {
         const window = getCurrentWindow();
         const whiteContainer = document.querySelector('.bg-white');
-        if (whiteContainer && !showDownloadModal && !isMemoModalOpen) {
+        if (whiteContainer && !isMemoModalOpen) {
           // Use double requestAnimationFrame to ensure DOM is fully updated
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -1099,19 +1031,19 @@ export function LauncherWindow() {
     }, delay);
     
     return () => clearTimeout(timeoutId);
-  }, [combinedResults, showDownloadModal, isMemoModalOpen]);
+  }, [combinedResults, isMemoModalOpen]);
 
     // Adjust window size when results actually change
     useEffect(() => {
-      // 如果备忘录模态框或下载模态框打开，不在这里调整窗口大小
-      if (isMemoModalOpen || showDownloadModal) {
+      // 如果备忘录模态框打开，不在这里调整窗口大小
+      if (isMemoModalOpen) {
         return;
       }
       
       const adjustWindowSize = () => {
         const window = getCurrentWindow();
         const whiteContainer = document.querySelector('.bg-white');
-        if (whiteContainer && !showDownloadModal && !isMemoModalOpen) {
+        if (whiteContainer && !isMemoModalOpen) {
           // Use double requestAnimationFrame to ensure DOM is fully updated
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -1134,11 +1066,11 @@ export function LauncherWindow() {
       
       // Adjust size after results state updates (减少延迟)
       setTimeout(adjustWindowSize, 100);
-    }, [results, showDownloadModal, isMemoModalOpen, windowWidth]);
+    }, [results, isMemoModalOpen, windowWidth]);
 
   // Update window size when windowWidth changes (but not during resizing)
   useEffect(() => {
-    if (isMemoModalOpen || isPluginListModalOpen || showDownloadModal || isResizing) {
+    if (isMemoModalOpen || isPluginListModalOpen || isResizing) {
       return;
     }
     
@@ -1155,7 +1087,7 @@ export function LauncherWindow() {
     };
     
     setTimeout(adjustWindowSize, 50);
-  }, [windowWidth, isMemoModalOpen, isPluginListModalOpen, showDownloadModal, isResizing]);
+  }, [windowWidth, isMemoModalOpen, isPluginListModalOpen, isResizing]);
 
   // Handle window width resizing
   useEffect(() => {
@@ -1516,7 +1448,6 @@ export function LauncherWindow() {
       const errorStr = typeof error === 'string' ? error : String(error);
       if (
         errorStr.includes('NOT_INSTALLED') || 
-        errorStr.includes('EXECUTABLE_CORRUPTED') ||
         errorStr.includes('SERVICE_NOT_RUNNING') ||
         errorStr.includes('not found') ||
         errorStr.includes('未找到') ||
@@ -1544,9 +1475,6 @@ export function LauncherWindow() {
     }
   };
 
-  const handleCloseDownloadModal = () => {
-    setShowDownloadModal(false);
-  };
 
   const handleStartEverything = async () => {
     try {
@@ -1562,27 +1490,6 @@ export function LauncherWindow() {
     }
   };
 
-  const handleDownloadEsExe = async () => {
-    try {
-      setIsDownloading(true);
-      setDownloadProgress(0);
-      setDownloadedPath(null);
-      setShowDownloadModal(true); // 显示下载进度模态框
-      
-      const path = await tauriApi.downloadEsExe();
-      setDownloadedPath(path);
-      setDownloadProgress(100);
-      setIsDownloading(false);
-      // 下载完成后，自动检测
-      await handleCheckAgain();
-    } catch (error) {
-      console.error("Failed to download es.exe:", error);
-      setIsDownloading(false);
-      setDownloadProgress(0);
-      setShowDownloadModal(false);
-      alert(`下载失败: ${error}`);
-    }
-  };
 
   const handleCheckAgain = async () => {
     try {
@@ -1621,7 +1528,6 @@ export function LauncherWindow() {
       if (status.available) {
         const path = await tauriApi.getEverythingPath();
         setEverythingPath(path);
-        setShowDownloadModal(false);
         if (path) {
           console.log("Everything found at:", path);
         }
@@ -1630,16 +1536,14 @@ export function LauncherWindow() {
         let errorMessage = "Everything 仍未检测到。\n\n";
         if (status.error) {
           if (status.error.startsWith("NOT_INSTALLED")) {
-            errorMessage += "es.exe 未找到。\n请点击\"下载 es.exe\"按钮下载并安装。";
-          } else if (status.error.startsWith("EXECUTABLE_CORRUPTED")) {
-            errorMessage += "es.exe 文件损坏。\n请删除损坏的文件后重新下载。\n\n文件位置：C:\\Program Files\\Everything\\es.exe";
+            errorMessage += "Everything 未安装。\n请先安装 Everything 主程序。";
           } else if (status.error.startsWith("SERVICE_NOT_RUNNING")) {
             errorMessage += "Everything 服务未运行。\n已尝试自动启动，如果仍然失败，请手动启动 Everything 主程序后点击\"刷新\"按钮。";
           } else {
-            errorMessage += `错误：${status.error}\n\n请确保：\n1. Everything 已正确安装\n2. es.exe 文件存在于 Everything 安装目录中\n3. Everything 主程序正在运行`;
+            errorMessage += `错误：${status.error}\n\n请确保：\n1. Everything 已正确安装\n2. Everything 主程序正在运行`;
           }
         } else {
-          errorMessage += "请确保：\n1. Everything 已正确安装\n2. es.exe 文件存在于 Everything 安装目录中\n3. Everything 主程序正在运行";
+          errorMessage += "请确保：\n1. Everything 已正确安装\n2. Everything 主程序正在运行";
         }
         alert(errorMessage);
       }
@@ -2828,20 +2732,6 @@ export function LauncherWindow() {
                     >
                       刷新
                     </button>
-                    {(!everythingError || everythingError.startsWith("NOT_INSTALLED") || everythingError.startsWith("EXECUTABLE_CORRUPTED")) && (
-                      <button
-                        onClick={handleDownloadEsExe}
-                        disabled={isDownloading}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${
-                          isDownloading
-                            ? 'bg-gray-400 text-white cursor-not-allowed'
-                            : 'bg-blue-500 text-white hover:bg-blue-600'
-                        }`}
-                        title="下载 es.exe（需要先安装 Everything）"
-                      >
-                        {isDownloading ? `下载中 ${downloadProgress}%` : '下载 es.exe'}
-                      </button>
-                    )}
                   </div>
                 )}
               </div>
@@ -2874,80 +2764,6 @@ export function LauncherWindow() {
       </div>
       )}
 
-      {/* Download Modal */}
-      {showDownloadModal && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-auto"
-          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
-          onClick={handleCloseDownloadModal}
-        >
-          <div 
-            className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 my-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">下载 Everything</h3>
-              <button
-                onClick={handleCloseDownloadModal}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
-                style={{ fontSize: '24px', lineHeight: '1' }}
-              >
-                ×
-              </button>
-            </div>
-            
-            <div className="space-y-4">
-              {isDownloading ? (
-                <div className="space-y-3">
-                  <div className="text-sm text-gray-600">
-                    <p className="mb-2">正在下载 es.exe...</p>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div
-                      className="bg-blue-500 h-full transition-all duration-300"
-                      style={{ width: `${downloadProgress}%` }}
-                    ></div>
-                  </div>
-                  <div className="text-center text-sm text-gray-500">
-                    {downloadProgress}%
-                  </div>
-                </div>
-              ) : downloadedPath ? (
-                <div className="space-y-3">
-                  <div className="text-sm text-gray-600">
-                    <p className="mb-2">✅ es.exe 下载完成！</p>
-                    <p className="mb-2 text-xs text-gray-500 break-all">
-                      保存位置：{downloadedPath}
-                    </p>
-                    <p className="mb-2">es.exe 已自动放置到 Everything 安装目录中。</p>
-                    <p className="mb-2">如果 Everything 已启用，现在应该可以正常使用文件搜索功能了。</p>
-                  </div>
-                  
-                  <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm text-blue-800">
-                    <p className="font-medium mb-1">💡 提示：</p>
-                    <p>如果 Everything 仍未检测到，请点击"重新检测"按钮。</p>
-                  </div>
-                  
-                  <div className="flex flex-wrap gap-2 justify-end">
-                    <button
-                      onClick={handleCloseDownloadModal}
-                      className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors whitespace-nowrap"
-                    >
-                      关闭
-                    </button>
-                    <button
-                      onClick={handleCheckAgain}
-                      className="px-4 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors whitespace-nowrap"
-                    >
-                      重新检测
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Context Menu */}
       {contextMenu && (() => {
