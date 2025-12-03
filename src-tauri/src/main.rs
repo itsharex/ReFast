@@ -36,7 +36,6 @@ static LOCK_FILE: Mutex<Option<Arc<std::fs::File>>> = Mutex::new(None);
 fn check_single_instance() -> bool {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use std::path::PathBuf;
     
     // 获取锁文件路径
     let lock_file_path = get_lock_file_path();
@@ -53,23 +52,63 @@ fn check_single_instance() -> bool {
                 // 检查进程是否还在运行
                 #[cfg(target_os = "windows")]
                 {
-                    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION};
+                    use windows_sys::Win32::System::Threading::{
+                        OpenProcess, GetExitCodeProcess, PROCESS_QUERY_INFORMATION
+                    };
                     use windows_sys::Win32::Foundation::CloseHandle;
                     
                     unsafe {
                         let handle = OpenProcess(PROCESS_QUERY_INFORMATION, 0, pid);
                         if handle != 0 {
+                            let mut exit_code: u32 = 0;
+                            if GetExitCodeProcess(handle, &mut exit_code) != 0 {
+                                // STILL_ACTIVE 的值是 259 (0x103)，如果退出码是这个值，说明进程还在运行
+                                const STILL_ACTIVE: u32 = 259;
+                                if exit_code == STILL_ACTIVE {
+                                    CloseHandle(handle);
+                                    // 进程还在运行
+                                    eprintln!("Another instance of ReFast is already running (PID: {}).", pid);
+                                    return false;
+                                }
+                            }
+                            // 进程已退出，关闭句柄并删除锁文件
                             CloseHandle(handle);
+                            eprintln!("Previous instance (PID: {}) has exited, cleaning up lock file.", pid);
+                            let _ = std::fs::remove_file(&lock_file_path);
+                        } else {
+                            // 无法打开进程，可能进程不存在，删除锁文件
+                            eprintln!("Cannot open process (PID: {}), assuming it doesn't exist, cleaning up lock file.", pid);
+                            let _ = std::fs::remove_file(&lock_file_path);
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // 非 Windows 平台：尝试向进程发送信号 0（不实际发送信号，只检查进程是否存在）
+                    use std::process::Command;
+                    let output = Command::new("kill")
+                        .args(&["-0", &pid.to_string()])
+                        .output();
+                    if let Ok(output) = output {
+                        if output.status.success() {
                             // 进程还在运行
                             eprintln!("Another instance of ReFast is already running (PID: {}).", pid);
                             return false;
                         }
                     }
+                    // 进程不存在，删除锁文件
+                    let _ = std::fs::remove_file(&lock_file_path);
                 }
+            } else {
+                // PID 无效，删除锁文件
+                eprintln!("Invalid PID in lock file, cleaning up.");
+                let _ = std::fs::remove_file(&lock_file_path);
             }
+        } else {
+            // 无法读取锁文件，删除它
+            eprintln!("Cannot read lock file, cleaning up.");
+            let _ = std::fs::remove_file(&lock_file_path);
         }
-        // 文件存在但内容无效，可能是之前的实例异常退出，删除旧文件
-        let _ = std::fs::remove_file(&lock_file_path);
     }
     
     // 尝试创建锁文件（独占模式）
@@ -426,6 +465,25 @@ fn main() {
                     }
                 }
                 // No background icon extraction on startup - icons will be extracted on-demand during search
+            });
+
+            // Show launcher window on startup after a short delay to ensure frontend is loaded
+            let app_handle = app.handle().clone();
+            let app_data_dir_startup = app_data_dir.clone();
+            std::thread::spawn(move || {
+                use std::time::Duration;
+                // Wait for frontend to load (500ms should be enough)
+                std::thread::sleep(Duration::from_millis(500));
+                
+                if let Some(window) = app_handle.get_webview_window("launcher") {
+                    set_launcher_window_position(&window, &app_data_dir_startup);
+                    if let Err(e) = window.show() {
+                        eprintln!("Failed to show launcher window on startup: {}", e);
+                    }
+                    if let Err(e) = window.set_focus() {
+                        eprintln!("Failed to focus launcher window on startup: {}", e);
+                    }
+                }
             });
 
             Ok(())
