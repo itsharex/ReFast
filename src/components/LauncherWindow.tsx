@@ -86,6 +86,10 @@ export function LauncherWindow() {
   const shouldPreserveScrollRef = useRef(false); // 标记是否需要保持滚动位置
   const finalResultsSetRef = useRef(false); // 方案 B 中仅用于调试/校验，不再阻止批次更新
   const incrementalLoadRef = useRef<number | null>(null); // 用于取消增量加载
+  const incrementalTimeoutRef = useRef<number | null>(null); // 用于取消增量加载的 setTimeout
+  const lastSearchQueryRef = useRef<string>(""); // 用于去重，避免相同查询重复搜索
+  const debounceTimeoutRef = useRef<number | null>(null); // 用于跟踪防抖定时器
+  const currentLoadResultsRef = useRef<SearchResult[]>([]); // 跟踪当前正在加载的结果，用于验证是否仍有效
 
   useEffect(() => {
     isMemoModalOpenRef.current = isMemoModalOpen;
@@ -466,6 +470,33 @@ export function LauncherWindow() {
     }
   };
 
+  // Highlight matching keywords in text
+  const highlightText = (text: string, query: string): string => {
+    if (!query || !query.trim() || !text) {
+      // Escape HTML to prevent XSS
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Escape HTML in the original text
+    const escapedText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    
+    // Split query into words (handle multiple words)
+    const queryWords = query.trim().split(/\s+/).filter(word => word.length > 0);
+    
+    // Escape special regex characters in query words
+    const escapedQueryWords = queryWords.map(word => 
+      word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    );
+    
+    // Create regex pattern that matches any of the query words (case-insensitive)
+    const pattern = new RegExp(`(${escapedQueryWords.join('|')})`, 'gi');
+    
+    // Replace matches with highlighted version
+    return escapedText.replace(pattern, (match) => {
+      return `<span class="text-orange-600 dark:text-orange-400 font-semibold bg-transparent">${match}</span>`;
+    });
+  };
+
   // Call Ollama API to ask AI (流式请求)
   const askOllama = async (prompt: string) => {
     if (!prompt.trim()) {
@@ -670,27 +701,40 @@ export function LauncherWindow() {
 
   // Search applications, file history, and Everything when query changes (with debounce)
   useEffect(() => {
-    if (query.trim() === "") {
+    // 清除之前的防抖定时器
+    if (debounceTimeoutRef.current !== null) {
+      clearTimeout(debounceTimeoutRef.current);
+      debounceTimeoutRef.current = null;
+    }
+
+    const trimmedQuery = query.trim();
+    
+    if (trimmedQuery === "") {
       // Cancel any ongoing search
       if (currentSearchRef.current) {
         currentSearchRef.current.cancelled = true;
         currentSearchRef.current = null;
       }
-      setFilteredApps([]);
-      setFilteredFiles([]);
-      setFilteredMemos([]);
-      setFilteredPlugins([]);
-      setSystemFolders([]);
-      setEverythingResults([]);
-      setEverythingTotalCount(null);
-      setEverythingCurrentCount(0);
-      setDetectedUrls([]);
-      setDetectedJson(null);
-      setAiAnswer(null); // 清空 AI 回答
-      setShowAiAnswer(false); // 退出 AI 回答模式
-      setResults([]);
-      setSelectedIndex(0);
-      setIsSearchingEverything(false);
+      lastSearchQueryRef.current = "";
+      
+      // 使用批量更新减少渲染次数
+      flushSync(() => {
+        setFilteredApps([]);
+        setFilteredFiles([]);
+        setFilteredMemos([]);
+        setFilteredPlugins([]);
+        setSystemFolders([]);
+        setEverythingResults([]);
+        setEverythingTotalCount(null);
+        setEverythingCurrentCount(0);
+        setDetectedUrls([]);
+        setDetectedJson(null);
+        setAiAnswer(null); // 清空 AI 回答
+        setShowAiAnswer(false); // 退出 AI 回答模式
+        setResults([]);
+        setSelectedIndex(0);
+        setIsSearchingEverything(false);
+      });
       return;
     }
     
@@ -701,45 +745,66 @@ export function LauncherWindow() {
       setIsAiLoading(false);
     }
     
-    // Extract URLs from query
+    // Extract URLs from query (同步操作，不需要防抖)
     const urls = extractUrls(query);
     setDetectedUrls(urls);
     
-    // Check if query is valid JSON
+    // Check if query is valid JSON (同步操作，不需要防抖)
     if (isValidJson(query)) {
       setDetectedJson(query.trim());
     } else {
       setDetectedJson(null);
     }
     
+    // 如果查询与上次相同，跳过搜索（去重机制）
+    if (trimmedQuery === lastSearchQueryRef.current) {
+      return;
+    }
+    
     // Debounce search to avoid too many requests
-    // Dynamic debounce time based on query length:
-    // Short queries (1-2 chars): 300ms
-    // Medium queries (3-5 chars): 200ms
-    // Long queries (6+ chars): 100ms
-    const queryLength = query.trim().length;
-    let debounceTime = 300; // default for short queries
+    // 优化防抖时间：增加防抖时间以应对频繁输入
+    // Short queries (1-2 chars): 400ms (增加延迟，减少频繁搜索)
+    // Medium queries (3-5 chars): 300ms
+    // Long queries (6+ chars): 200ms (仍然较快响应长查询)
+    const queryLength = trimmedQuery.length;
+    let debounceTime = 400; // default for short queries
     if (queryLength >= 3 && queryLength <= 5) {
-      debounceTime = 200; // medium queries
+      debounceTime = 300; // medium queries
     } else if (queryLength >= 6) {
-      debounceTime = 100; // long queries
+      debounceTime = 200; // long queries
     }
     
     const timeoutId = setTimeout(() => {
-      searchApplications(query);
-      searchFileHistory(query);
-      searchMemos(query);
-      handleSearchPlugins(query);
-      searchSystemFolders(query);
+      // 再次检查查询是否仍然有效（可能在防抖期间已被清空或改变）
+      const currentQuery = query.trim();
+      if (currentQuery === "" || currentQuery !== trimmedQuery) {
+        return;
+      }
+      
+      // 标记当前查询为已搜索
+      lastSearchQueryRef.current = trimmedQuery;
+      
+      searchApplications(trimmedQuery);
+      searchFileHistory(trimmedQuery);
+      searchMemos(trimmedQuery);
+      handleSearchPlugins(trimmedQuery);
+      searchSystemFolders(trimmedQuery);
       if (isEverythingAvailable) {
-        console.log("Everything is available, calling searchEverything with query:", query);
-        searchEverything(query);
+        console.log("Everything is available, calling searchEverything with query:", trimmedQuery);
+        searchEverything(trimmedQuery);
       } else {
         console.log("Everything is not available, skipping search. isEverythingAvailable:", isEverythingAvailable);
       }
-    }, debounceTime);
+    }, debounceTime) as unknown as number;
     
-    return () => clearTimeout(timeoutId);
+    debounceTimeoutRef.current = timeoutId;
+    
+    return () => {
+      if (debounceTimeoutRef.current !== null) {
+        clearTimeout(debounceTimeoutRef.current);
+        debounceTimeoutRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, isEverythingAvailable]);
 
@@ -790,6 +855,80 @@ export function LauncherWindow() {
     }
   };
 
+  // 相关性评分函数
+  const calculateRelevanceScore = (
+    displayName: string,
+    path: string,
+    query: string,
+    useCount?: number,
+    lastUsed?: number,
+    isEverything?: boolean
+  ): number => {
+    if (!query || !query.trim()) {
+      // 如果查询为空，只根据使用频率和时间排序
+      let score = 0;
+      if (useCount !== undefined) {
+        score += Math.min(useCount, 100); // 最多100分
+      }
+      if (lastUsed !== undefined) {
+        // 最近使用时间：距离现在越近分数越高
+        // 将时间戳转换为天数，然后计算分数（30天内使用过的有加分）
+        const daysSinceUse = (Date.now() - lastUsed) / (1000 * 60 * 60 * 24);
+        if (daysSinceUse <= 30) {
+          score += Math.max(0, 50 - daysSinceUse * 2); // 30天内：50分递减到0分
+        }
+      }
+      return score;
+    }
+
+    const queryLower = query.toLowerCase().trim();
+    const nameLower = displayName.toLowerCase();
+    const pathLower = path.toLowerCase();
+
+    let score = 0;
+
+    // 文件名匹配（最高优先级）
+    if (nameLower === queryLower) {
+      score += 1000; // 完全匹配
+    } else if (nameLower.startsWith(queryLower)) {
+      score += 500; // 开头匹配
+    } else if (nameLower.includes(queryLower)) {
+      score += 100; // 包含匹配
+    }
+
+    // 路径匹配（权重较低）
+    if (pathLower.includes(queryLower)) {
+      // 如果文件名已经匹配，路径匹配的权重更低
+      if (score === 0) {
+        score += 10; // 只有路径匹配时给10分
+      } else {
+        score += 5; // 文件名已匹配时只给5分
+      }
+    }
+
+    // Everything 结果：路径深度越浅越好
+    if (isEverything) {
+      const pathDepth = path.split(/[/\\]/).length;
+      // 路径深度越浅，加分越多（最多50分）
+      score += Math.max(0, 50 - pathDepth * 2);
+    }
+
+    // 使用频率加分（最多100分）
+    if (useCount !== undefined) {
+      score += Math.min(useCount, 100);
+    }
+
+    // 最近使用时间加分
+    if (lastUsed !== undefined) {
+      const daysSinceUse = (Date.now() - lastUsed) / (1000 * 60 * 60 * 24);
+      if (daysSinceUse <= 30) {
+        score += Math.max(0, 50 - daysSinceUse * 2); // 30天内：50分递减到0分
+      }
+    }
+
+    return score;
+  };
+
   // Combine apps, files, Everything results, and URLs into results when they change
   // 使用 useMemo 优化，避免不必要的重新计算
   const combinedResults = useMemo(() => {
@@ -836,7 +975,7 @@ export function LauncherWindow() {
       lowerQuery.includes(keyword.toLowerCase()) || keyword.toLowerCase().includes(lowerQuery)
     );
     
-    const otherResults: SearchResult[] = [
+    let otherResults: SearchResult[] = [
       // 如果有 AI 回答，将其添加到结果列表的最前面
       ...(aiAnswer ? [{
         type: "ai" as const,
@@ -903,14 +1042,113 @@ export function LauncherWindow() {
       })),
     ];
     
-    // Sort other results by last opened time (most recent first)
-    // Items with no history will be sorted after items with history
-    otherResults.sort((a, b) => {
-      const aTime = openHistory[a.path] || 0;
-      const bTime = openHistory[b.path] || 0;
-      // Most recent first (descending order)
-      return bTime - aTime;
-    });
+    // 使用相关性评分系统对所有结果进行排序
+    // 性能优化：当结果数量过多时，只对前1000条进行排序，避免对大量结果排序造成卡顿
+    const MAX_SORT_COUNT = 1000;
+    const needsSorting = otherResults.length > MAX_SORT_COUNT;
+    
+    if (needsSorting) {
+      // 先分离特殊类型（这些总是排在最前面，不需要排序）
+      const specialTypes = ["ai", "history", "settings"];
+      const specialResults: SearchResult[] = [];
+      const regularResults: SearchResult[] = [];
+      
+      for (const result of otherResults) {
+        if (specialTypes.includes(result.type)) {
+          specialResults.push(result);
+        } else {
+          regularResults.push(result);
+        }
+      }
+      
+      // 只对前 MAX_SORT_COUNT 条常规结果进行排序
+      const toSort = regularResults.slice(0, MAX_SORT_COUNT);
+      const rest = regularResults.slice(MAX_SORT_COUNT);
+      
+      toSort.sort((a, b) => {
+        // 获取使用频率和最近使用时间
+        const aUseCount = a.file?.use_count;
+        const aLastUsed = a.file?.last_used || openHistory[a.path] || 0;
+        const bUseCount = b.file?.use_count;
+        const bLastUsed = b.file?.last_used || openHistory[b.path] || 0;
+
+        // 计算相关性评分
+        const aScore = calculateRelevanceScore(
+          a.displayName,
+          a.path,
+          query,
+          aUseCount,
+          aLastUsed,
+          a.type === "everything"
+        );
+        const bScore = calculateRelevanceScore(
+          b.displayName,
+          b.path,
+          query,
+          bUseCount,
+          bLastUsed,
+          b.type === "everything"
+        );
+
+        // 按评分降序排序（分数高的在前）
+        if (bScore !== aScore) {
+          return bScore - aScore;
+        }
+
+        // 如果评分相同，按最近使用时间排序
+        return bLastUsed - aLastUsed;
+      });
+      
+      // 重新组合：特殊类型 + 排序后的前部分 + 未排序的后部分
+      otherResults = [...specialResults, ...toSort, ...rest];
+    } else {
+      // 结果数量较少时，直接排序所有结果
+      otherResults.sort((a, b) => {
+        // 特殊类型的结果保持最高优先级（AI、历史、设置等）
+        const specialTypes = ["ai", "history", "settings"];
+        const aIsSpecial = specialTypes.includes(a.type);
+        const bIsSpecial = specialTypes.includes(b.type);
+        
+        if (aIsSpecial && !bIsSpecial) return -1;
+        if (!aIsSpecial && bIsSpecial) return 1;
+        if (aIsSpecial && bIsSpecial) {
+          // 特殊类型之间保持原有顺序
+          return 0;
+        }
+
+        // 获取使用频率和最近使用时间
+        const aUseCount = a.file?.use_count;
+        const aLastUsed = a.file?.last_used || openHistory[a.path] || 0;
+        const bUseCount = b.file?.use_count;
+        const bLastUsed = b.file?.last_used || openHistory[b.path] || 0;
+
+        // 计算相关性评分
+        const aScore = calculateRelevanceScore(
+          a.displayName,
+          a.path,
+          query,
+          aUseCount,
+          aLastUsed,
+          a.type === "everything"
+        );
+        const bScore = calculateRelevanceScore(
+          b.displayName,
+          b.path,
+          query,
+          bUseCount,
+          bLastUsed,
+          b.type === "everything"
+        );
+
+        // 按评分降序排序（分数高的在前）
+        if (bScore !== aScore) {
+          return bScore - aScore;
+        }
+
+        // 如果评分相同，按最近使用时间排序
+        return bLastUsed - aLastUsed;
+      });
+    }
     
     // 如果 JSON 中包含链接，优先显示 JSON 格式化选项，否则按原来的顺序（URLs -> JSON formatter -> other results）
     if (jsonContainsLinks && jsonFormatterResult.length > 0) {
@@ -929,17 +1167,25 @@ export function LauncherWindow() {
 
   // 分批加载结果的函数
   const loadResultsIncrementally = (allResults: SearchResult[]) => {
-    // 取消之前的增量加载
+    // 取消之前的增量加载（包括 animationFrame 和 setTimeout）
     if (incrementalLoadRef.current !== null) {
       cancelAnimationFrame(incrementalLoadRef.current);
       incrementalLoadRef.current = null;
+    }
+    if (incrementalTimeoutRef.current !== null) {
+      clearTimeout(incrementalTimeoutRef.current);
+      incrementalTimeoutRef.current = null;
     }
 
     // 如果 query 为空且没有结果（包括 AI 回答），直接清空结果并返回
     if (queryRef.current.trim() === "" && allResults.length === 0) {
       setResults([]);
+      currentLoadResultsRef.current = [];
       return;
     }
+
+    // 保存当前要加载的结果引用，用于后续验证
+    currentLoadResultsRef.current = allResults;
 
     const INITIAL_COUNT = 100; // 初始显示100条
     const INCREMENT = 50; // 每次增加50条
@@ -950,52 +1196,79 @@ export function LauncherWindow() {
       setResults(allResults.slice(0, INITIAL_COUNT));
     } else {
       setResults([]);
+      currentLoadResultsRef.current = [];
       return;
     }
 
     // 如果结果数量少于初始数量，直接返回
     if (allResults.length <= INITIAL_COUNT) {
       setResults(allResults);
+      currentLoadResultsRef.current = [];
       return;
     }
 
     // 逐步加载更多结果
     let currentCount = INITIAL_COUNT;
     const loadMore = () => {
-      // 在每次更新前检查 query 是否为空（使用 ref 获取最新值）
-      if (queryRef.current.trim() === "") {
+      // 在每次更新前检查：query 是否为空，以及结果是否已过时
+      if (queryRef.current.trim() === "" || 
+          currentLoadResultsRef.current !== allResults) {
+        // 结果已过时或查询已清空，停止加载
         setResults([]);
         incrementalLoadRef.current = null;
+        incrementalTimeoutRef.current = null;
+        currentLoadResultsRef.current = [];
         return;
       }
 
       if (currentCount < allResults.length) {
         currentCount = Math.min(currentCount + INCREMENT, allResults.length);
         
-        // 再次检查 query（防止在异步操作期间被清空）
-        if (queryRef.current.trim() !== "") {
+        // 再次检查结果是否仍然有效
+        if (queryRef.current.trim() !== "" && 
+            currentLoadResultsRef.current === allResults) {
           setResults(allResults.slice(0, currentCount));
         } else {
+          // 结果已过时，停止加载
           setResults([]);
           incrementalLoadRef.current = null;
+          incrementalTimeoutRef.current = null;
+          currentLoadResultsRef.current = [];
           return;
         }
         
         if (currentCount < allResults.length) {
+          // 使用嵌套的 requestAnimationFrame 和 setTimeout 来确保正确的取消机制
           incrementalLoadRef.current = requestAnimationFrame(() => {
-            setTimeout(loadMore, DELAY_MS);
+            // 再次检查是否仍然有效
+            if (currentLoadResultsRef.current !== allResults) {
+              incrementalLoadRef.current = null;
+              return;
+            }
+            incrementalTimeoutRef.current = setTimeout(loadMore, DELAY_MS) as unknown as number;
           });
         } else {
+          // 加载完成
           incrementalLoadRef.current = null;
+          incrementalTimeoutRef.current = null;
+          currentLoadResultsRef.current = [];
         }
       } else {
+        // 加载完成
         incrementalLoadRef.current = null;
+        incrementalTimeoutRef.current = null;
+        currentLoadResultsRef.current = [];
       }
     };
 
     // 开始增量加载
     incrementalLoadRef.current = requestAnimationFrame(() => {
-      setTimeout(loadMore, DELAY_MS);
+      // 再次检查结果是否仍然有效
+      if (currentLoadResultsRef.current !== allResults) {
+        incrementalLoadRef.current = null;
+        return;
+      }
+      incrementalTimeoutRef.current = setTimeout(loadMore, DELAY_MS) as unknown as number;
     });
   };
 
@@ -1003,10 +1276,16 @@ export function LauncherWindow() {
     // 如果查询为空且没有 AI 回答，直接清空结果
     if (query.trim() === "" && !aiAnswer) {
       setResults([]);
+      // 取消所有增量加载任务
       if (incrementalLoadRef.current !== null) {
         cancelAnimationFrame(incrementalLoadRef.current);
         incrementalLoadRef.current = null;
       }
+      if (incrementalTimeoutRef.current !== null) {
+        clearTimeout(incrementalTimeoutRef.current);
+        incrementalTimeoutRef.current = null;
+      }
+      currentLoadResultsRef.current = [];
       return;
     }
     
@@ -1019,6 +1298,11 @@ export function LauncherWindow() {
         cancelAnimationFrame(incrementalLoadRef.current);
         incrementalLoadRef.current = null;
       }
+      if (incrementalTimeoutRef.current !== null) {
+        clearTimeout(incrementalTimeoutRef.current);
+        incrementalTimeoutRef.current = null;
+      }
+      currentLoadResultsRef.current = [];
     };
   }, [combinedResults, query]);
 
@@ -2601,7 +2885,10 @@ export function LauncherWindow() {
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{result.displayName}</div>
+                      <div 
+                        className="font-medium truncate"
+                        dangerouslySetInnerHTML={{ __html: highlightText(result.displayName, query) }}
+                      />
                       {result.type === "ai" && result.aiAnswer && (
                         <div
                           className={`text-sm mt-1 ${
@@ -2622,9 +2909,8 @@ export function LauncherWindow() {
                           className={`text-sm truncate ${
                             index === selectedIndex ? "text-blue-100" : "text-gray-500"
                           }`}
-                        >
-                          {result.path}
-                        </div>
+                          dangerouslySetInnerHTML={{ __html: highlightText(result.path, query) }}
+                        />
                       )}
                       {result.type === "memo" && result.memo && (
                         <div
@@ -2640,9 +2926,8 @@ export function LauncherWindow() {
                           className={`text-xs ${
                             index === selectedIndex ? "text-green-200" : "text-gray-400"
                           }`}
-                        >
-                          {result.plugin.description}
-                        </div>
+                          dangerouslySetInnerHTML={{ __html: highlightText(result.plugin.description, query) }}
+                        />
                       )}
                       {result.type === "file" && result.file && (
                         <div
@@ -2698,10 +2983,13 @@ export function LauncherWindow() {
                               className={`text-xs truncate ${
                                 index === selectedIndex ? "text-purple-200" : "text-gray-400"
                               }`}
-                            >
-                              {result.memo.content.slice(0, 50)}
-                              {result.memo.content.length > 50 ? "..." : ""}
-                            </span>
+                              dangerouslySetInnerHTML={{ 
+                                __html: highlightText(
+                                  result.memo.content.slice(0, 50) + (result.memo.content.length > 50 ? "..." : ""),
+                                  query
+                                )
+                              }}
+                            />
                           )}
                         </div>
                       )}
