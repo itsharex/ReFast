@@ -75,11 +75,10 @@ pub mod windows {
         Some("::{645FF040-5081-101B-9F08-00AA002F954E}".to_string())
     }
 
-    /// 获取控制面板路径（使用 CLSID）
+    /// 获取控制面板路径（使用 control.exe 命令打开传统控制面板）
     fn get_control_panel_path() -> Option<String> {
-        // 控制面板的 CLSID: {21EC2020-3AEA-1069-A2DD-08002B30309D}
-        // 使用 ::{CLSID} 格式访问虚拟文件夹
-        Some("::{21EC2020-3AEA-1069-A2DD-08002B30309D}".to_string())
+        // 使用 control 命令打开传统控制面板（分类视图）
+        Some("control".to_string())
     }
 
     /// 获取下载文件夹路径（需要特殊处理）

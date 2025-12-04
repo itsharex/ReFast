@@ -379,6 +379,21 @@ pub fn launch_file(path: &str) -> Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         
+        // Special handling for control command (traditional Control Panel)
+        if trimmed == "control" {
+            use std::process::Command;
+            use std::os::windows::process::CommandExt;
+            
+            eprintln!("[DEBUG] launch_file: executing control command");
+            
+            Command::new("control.exe")
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW - 不显示控制台窗口
+                .spawn()
+                .map_err(|e| format!("Failed to open Control Panel: {}", e))?;
+            
+            return Ok(());
+        }
+        
         // Check if this is a CLSID path (virtual folder like Recycle Bin)
         // CLSID paths start with "::"
         let is_clsid_path = trimmed.starts_with("::");

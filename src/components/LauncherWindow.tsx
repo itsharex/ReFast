@@ -1683,7 +1683,17 @@ export function LauncherWindow() {
       } else if (result.type === "system_folder" && result.systemFolder) {
         // Launch system folder
         await tauriApi.launchFile(result.systemFolder.path);
-        await tauriApi.addFileToHistory(result.systemFolder.path);
+        // 尝试添加到历史记录（失败也不影响）
+        try {
+          await tauriApi.addFileToHistory(result.systemFolder.path);
+        } catch (error) {
+          console.error("Failed to add system folder to history:", error);
+        }
+        // 打开系统文件夹后隐藏启动器
+        await tauriApi.hideLauncher();
+        setQuery("");
+        setSelectedIndex(0);
+        return;
       } else if (result.type === "memo" && result.memo) {
         // 打开备忘录详情弹窗（单条模式）
         setIsMemoListMode(false);
