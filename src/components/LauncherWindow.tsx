@@ -1965,12 +1965,29 @@ export function LauncherWindow() {
         // 用最终结果覆盖批次累积的结果，因为最终结果才是后端实际返回的准确结果
         // 批次事件中的 total_count 是 Everything 找到的总数，可能远大于后端实际返回的结果数
         // 对结果进行去重，基于路径（path）字段，防止重复显示
-        const uniqueResults = response.results.filter((result, index, self) =>
-          index === self.findIndex((r) => r.path === result.path)
-        );
-        setEverythingResults(uniqueResults);
-        setEverythingTotalCount(response.total_count);
-        setEverythingCurrentCount(uniqueResults.length);
+        // 性能优化：使用 Map 实现 O(n) 去重，而不是 O(n²) 的 findIndex
+        // 性能优化：使用 requestIdleCallback 延迟处理大量结果，避免阻塞主线程
+        const processResults = () => {
+          const seenPaths = new Map<string, EverythingResult>();
+          const uniqueResults: EverythingResult[] = [];
+          for (const result of response.results) {
+            if (!seenPaths.has(result.path)) {
+              seenPaths.set(result.path, result);
+              uniqueResults.push(result);
+            }
+          }
+          setEverythingResults(uniqueResults);
+          setEverythingTotalCount(response.total_count);
+          setEverythingCurrentCount(uniqueResults.length);
+        };
+        
+        // 如果结果数量较少，立即处理；否则延迟处理以避免阻塞 UI
+        if (response.results.length <= 20) {
+          processResults();
+        } else {
+          // 使用 setTimeout 将处理延迟到下一个事件循环，让 UI 有机会更新
+          setTimeout(processResults, 0);
+        }
       } else {
         // Query 已改变，清空结果
         setEverythingResults([]);
