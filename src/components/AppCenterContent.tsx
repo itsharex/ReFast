@@ -140,6 +140,8 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const [pluginUsage, setPluginUsage] = useState<PluginUsage[]>([]);
   const [isLoadingPluginUsage, setIsLoadingPluginUsage] = useState(false);
   const [pluginUsageError, setPluginUsageError] = useState<string | null>(null);
+  const pluginUsageTimeoutRef = useRef<number | null>(null);
+  const hasLoadedPluginUsageRef = useRef(false);
 
   const formatTimestamp = (timestamp?: number | null) => {
     if (!timestamp) return "暂无";
@@ -203,16 +205,47 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const loadPluginUsage = useCallback(async () => {
     setIsLoadingPluginUsage(true);
     setPluginUsageError(null);
+    const timeoutMs = 8000;
+    console.log("[statistics] load plugin usage start");
     try {
-      const usage = await tauriApi.getPluginUsage();
+      const usage = await Promise.race([
+        tauriApi.getPluginUsage(),
+        new Promise<PluginUsage[]>((_, reject) =>
+          setTimeout(() => reject(new Error("加载超时，请重试")), timeoutMs)
+        ),
+      ]);
+      console.log("[statistics] load plugin usage success", usage);
       setPluginUsage(usage);
     } catch (error: any) {
       console.warn("[statistics] failed to load plugin usage", error);
+      console.log("[statistics] plugin usage error detail", error);
       setPluginUsageError(error?.message || "加载插件使用数据失败");
     } finally {
+      console.log("[statistics] load plugin usage end");
       setIsLoadingPluginUsage(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (isLoadingPluginUsage) {
+      if (pluginUsageTimeoutRef.current) {
+        window.clearTimeout(pluginUsageTimeoutRef.current);
+      }
+      pluginUsageTimeoutRef.current = window.setTimeout(() => {
+        setIsLoadingPluginUsage(false);
+        setPluginUsageError((prev) => prev || "加载超时，请重试或检查本地服务");
+      }, 12000);
+    } else if (pluginUsageTimeoutRef.current) {
+      window.clearTimeout(pluginUsageTimeoutRef.current);
+      pluginUsageTimeoutRef.current = null;
+    }
+    return () => {
+      if (pluginUsageTimeoutRef.current) {
+        window.clearTimeout(pluginUsageTimeoutRef.current);
+        pluginUsageTimeoutRef.current = null;
+      }
+    };
+  }, [isLoadingPluginUsage]);
 
   useEffect(() => {
     if (activeCategory === "statistics" && usersCount === null && !isLoadingUsersCount) {
@@ -221,7 +254,12 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   }, [ALL_TIME_FROM, activeCategory, isLoadingUsersCount, loadUsersCount, usersCount]);
 
   useEffect(() => {
-    if (activeCategory === "statistics" && pluginUsage.length === 0 && !isLoadingPluginUsage && !pluginUsageError) {
+    if (
+      activeCategory === "statistics" &&
+      !hasLoadedPluginUsageRef.current &&
+      !isLoadingPluginUsage
+    ) {
+      hasLoadedPluginUsageRef.current = true;
       void loadPluginUsage();
     }
   }, [activeCategory, isLoadingPluginUsage, loadPluginUsage, pluginUsage.length, pluginUsageError]);
@@ -1375,6 +1413,65 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                   <div className="mt-1 text-xs text-gray-500">{card.desc}</div>
                 </div>
               ))}
+            </div>
+
+            <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-gray-900">插件使用次数</div>
+                  <div className="text-sm text-gray-500">基于本地 SQLite 的启动次数统计，先运行任意插件后会出现数据</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {pluginUsageError && <span className="text-xs text-red-500">{pluginUsageError}</span>}
+                  <button
+                    onClick={() => void loadPluginUsage()}
+                    className="px-3 py-2 text-xs rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:border-blue-300 transition disabled:opacity-50"
+                    disabled={isLoadingPluginUsage}
+                  >
+                    {isLoadingPluginUsage ? "刷新中..." : "刷新"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3">
+                {isLoadingPluginUsage && <div className="text-xs text-gray-500">加载中...</div>}
+                {!isLoadingPluginUsage && pluginUsageError && (
+                  <div className="text-xs text-red-500">{pluginUsageError}</div>
+                )}
+                {!isLoadingPluginUsage && !pluginUsageError && pluginUsage.length === 0 && (
+                  <div className="text-xs text-gray-500">
+                    暂无插件使用数据，尝试执行一个插件后再点击右上角刷新
+                  </div>
+                )}
+                {!isLoadingPluginUsage && pluginUsage.length > 0 && (
+                  <div className="space-y-2">
+                    {pluginUsage.slice(0, 20).map((item) => {
+                      const displayName = item.name || pluginNameMap.get(item.pluginId) || item.pluginId;
+                      return (
+                        <div
+                          key={item.pluginId}
+                          className="flex items-center justify-between gap-3 p-3 rounded-lg border border-gray-100 bg-gray-50"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 truncate">{displayName}</div>
+                            <div className="text-xs text-gray-500 truncate">{item.pluginId}</div>
+                            <div className="text-xs text-gray-400">最近使用 {formatTimestamp(item.lastOpened)}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-lg font-semibold text-gray-900">
+                              {item.openCount.toLocaleString()}
+                            </div>
+                            <div className="text-xs text-gray-500">累计次数</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {pluginUsage.length > 20 && (
+                      <div className="text-[11px] text-gray-400">已显示前 20 个插件</div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="p-4 rounded-xl border border-dashed border-gray-200 bg-white shadow-sm">

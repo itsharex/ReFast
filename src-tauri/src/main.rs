@@ -11,6 +11,7 @@ mod hotkey;
 mod hotkey_handler;
 // mod keyboard_hook; // 已不再需要，hotkey_handler 已支持双击修饰键
 mod db;
+mod plugin_usage;
 mod memos;
 mod open_history;
 mod recording;
@@ -536,6 +537,8 @@ fn main() {
             open_url,
             record_open_history,
             get_open_history,
+            record_plugin_usage,
+            get_plugin_usage,
             show_memo_window,
             show_plugin_list_window,
             show_json_formatter_window,

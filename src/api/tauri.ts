@@ -11,6 +11,7 @@ import type {
   IndexStatus,
   FilePreview,
   DatabaseBackupList,
+  PluginUsage,
 } from "../types";
 
 export const tauriApi = {
@@ -348,6 +349,14 @@ export const tauriApi = {
   },
 
   // Plugin APIs
+  async recordPluginUsage(pluginId: string, name?: string | null): Promise<PluginUsage> {
+    return invoke("record_plugin_usage", { pluginId, name });
+  },
+
+  async getPluginUsage(): Promise<PluginUsage[]> {
+    return invoke("get_plugin_usage");
+  },
+
   async getPluginDirectory(): Promise<string> {
     return invoke("get_plugin_directory");
   },

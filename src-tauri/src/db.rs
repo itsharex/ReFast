@@ -109,6 +109,14 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS plugin_usage (
+            plugin_id TEXT PRIMARY KEY,
+            name TEXT,
+            open_count INTEGER NOT NULL,
+            last_opened INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_plugin_usage_last_opened ON plugin_usage(last_opened);
     "#,
     )
     .map_err(|e| format!("Failed to run database migrations: {}", e))?;

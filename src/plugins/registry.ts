@@ -1,6 +1,7 @@
 import type { Plugin, PluginContext } from "../types";
 import type { LoadedPlugin, PluginManifest } from "./types";
 import { PluginLoader } from "./loader";
+import { tauriApi } from "../api/tauri";
 
 // 内置插件定义（从旧的 index.ts 迁移）
 import { createBuiltinPlugins } from "./builtin";
@@ -187,6 +188,11 @@ export class PluginRegistry {
 
     try {
       await plugin.execute(context);
+      void tauriApi
+        .recordPluginUsage(pluginId, plugin.name)
+        .catch((error: unknown) =>
+          console.warn("[PluginUsage] failed to record plugin usage", error)
+        );
     } catch (error) {
       console.error(`Failed to execute plugin ${pluginId}:`, error);
       throw error;

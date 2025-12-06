@@ -187,3 +187,10 @@ export interface Plugin {
   execute: (context: PluginContext) => Promise<void> | void;
 }
 
+export interface PluginUsage {
+  pluginId: string;
+  name?: string | null;
+  openCount: number;
+  lastOpened: number;
+}
+

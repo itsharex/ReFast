@@ -1,4 +1,5 @@
 import { pluginRegistry } from "./registry";
+import { tauriApi } from "../api/tauri";
 import type { Plugin, PluginContext } from "../types";
 
 // 向后兼容：导出旧的 API
@@ -12,6 +13,14 @@ export let executePlugin: (
 
 // 初始化状态
 let initializationPromise: Promise<void> | null = null;
+
+const safeRecordPluginUsage = async (pluginId: string, name?: string) => {
+  try {
+    await tauriApi.recordPluginUsage(pluginId, name ?? null);
+  } catch (error) {
+    console.warn("[PluginUsage] record failed", error);
+  }
+};
 
 /**
  * 初始化插件系统
@@ -77,6 +86,7 @@ executePlugin = async (pluginId: string, context: PluginContext) => {
   }
   try {
     await plugin.execute(context);
+    void safeRecordPluginUsage(pluginId, plugin.name);
   } catch (error) {
     console.error(`Failed to execute plugin ${pluginId}:`, error);
   }

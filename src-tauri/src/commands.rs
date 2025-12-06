@@ -5,6 +5,7 @@ use crate::file_history;
 use crate::hooks;
 use crate::memos;
 use crate::open_history;
+use crate::plugin_usage;
 use crate::recording::{RecordingMeta, RecordingState};
 use crate::replay::ReplayState;
 use crate::settings;
@@ -2330,6 +2331,22 @@ pub fn record_open_history(key: String, app: tauri::AppHandle) -> Result<(), Str
 pub fn get_open_history(app: tauri::AppHandle) -> Result<std::collections::HashMap<String, u64>, String> {
     let app_data_dir = get_app_data_dir(&app)?;
     open_history::get_all_history(&app_data_dir)
+}
+
+#[tauri::command]
+pub fn record_plugin_usage(
+    plugin_id: String,
+    name: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<plugin_usage::PluginUsage, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    plugin_usage::record_plugin_open(plugin_id, name, &app_data_dir)
+}
+
+#[tauri::command]
+pub fn get_plugin_usage(app: tauri::AppHandle) -> Result<Vec<plugin_usage::PluginUsage>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    plugin_usage::list_plugin_usage(&app_data_dir)
 }
 
 #[tauri::command]
