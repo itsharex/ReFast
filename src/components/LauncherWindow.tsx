@@ -11,6 +11,16 @@ import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { plugins, searchPlugins, executePlugin } from "../plugins";
 import { AppCenterContent } from "./AppCenterContent";
+import {
+  extractUrls,
+  isValidJson,
+  highlightText,
+  isLikelyAbsolutePath,
+  isFolderLikePath,
+  isLnkPath,
+  calculateRelevanceScore,
+} from "../utils/launcherUtils";
+import { getThemeConfig, getLayoutConfig, type ResultStyle } from "../utils/themeConfig";
 
 type SearchResult = {
   type: "app" | "file" | "everything" | "url" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
@@ -27,7 +37,6 @@ type SearchResult = {
   path: string;
 };
 
-type ResultStyle = "compact" | "soft" | "skeuomorphic";
 
 export function LauncherWindow() {
   const [query, setQuery] = useState("");
@@ -639,21 +648,6 @@ export function LauncherWindow() {
     };
   }, []);
 
-  // Extract URLs from text
-  const extractUrls = (text: string): string[] => {
-    if (!text || text.trim().length === 0) return [];
-    
-    // 只匹配以 http:// 或 https:// 开头的 URL
-    const urlPattern = /https?:\/\/[^\s<>"']+/gi;
-    const matches = text.match(urlPattern);
-    if (!matches) return [];
-    
-    // 清理并返回 URL
-    return matches
-      .map(url => url.trim())
-      .filter((url): url is string => url.length > 0)
-      .filter((url, index, self) => self.indexOf(url) === index); // Remove duplicates
-  };
 
   // 确认打开剪切板 URL
   const handleConfirmOpenClipboardUrl = async () => {
@@ -737,197 +731,10 @@ export function LauncherWindow() {
 
   // 剪切板 URL 弹窗出现时，也一起参与主窗口高度计算（在下面统一的窗口高度逻辑中处理）
 
-  // Check if text is valid JSON
-  const isValidJson = (text: string): boolean => {
-    if (!text || text.trim().length === 0) return false;
-    
-    const trimmed = text.trim();
-    
-    // Quick check: JSON should start with { or [
-    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-      return false;
-    }
-    
-    // Try to parse as JSON
-    try {
-      JSON.parse(trimmed);
-      return true;
-    } catch {
-      return false;
-    }
-  };
 
-  // Highlight matching keywords in text
-  const highlightText = (text: string, query: string): string => {
-    if (!query || !query.trim() || !text) {
-      // Escape HTML to prevent XSS
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
+  const theme = useMemo(() => getThemeConfig(resultStyle), [resultStyle]);
 
-    // Escape HTML in the original text
-    const escapedText = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    
-    // Split query into words (handle multiple words)
-    const queryWords = query.trim().split(/\s+/).filter(word => word.length > 0);
-    
-    // Escape special regex characters in query words
-    const escapedQueryWords = queryWords.map(word => 
-      word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    );
-    
-    // Create regex pattern that matches any of the query words (case-insensitive)
-    const pattern = new RegExp(`(${escapedQueryWords.join('|')})`, 'gi');
-    
-    // Replace matches with highlighted version
-    return escapedText.replace(pattern, (match) => {
-      return `<span class="highlight-match font-semibold">${match}</span>`;
-    });
-  };
-
-  const theme = useMemo(() => {
-    const compact = {
-      card: (selected: boolean) =>
-        `group relative mx-2 my-1 px-3.5 py-2.5 rounded-lg border cursor-pointer transition-colors duration-150 ${
-          selected
-            ? "bg-indigo-50 text-gray-900 border-indigo-200"
-            : "bg-white text-gray-800 border-gray-100 hover:bg-gray-50 hover:border-gray-200"
-        }`,
-      indicator: (selected: boolean) =>
-        `absolute left-0 top-2 bottom-2 w-[2px] rounded-full transition-opacity ${
-          selected ? "bg-indigo-500 opacity-100" : "bg-indigo-300 opacity-0 group-hover:opacity-70"
-        }`,
-      indexBadge: (selected: boolean) =>
-        `text-[11px] font-semibold flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${
-          selected ? "bg-indigo-500 text-white" : "bg-gray-100 text-gray-500 group-hover:bg-gray-200"
-        }`,
-      iconWrap: (selected: boolean) =>
-        `w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden transition-colors duration-150 ${
-          selected ? "bg-indigo-100 border border-indigo-200" : "bg-gray-50 border border-gray-100 group-hover:border-gray-200"
-        }`,
-      iconColor: (selected: boolean, defaultColor: string) => (selected ? "text-indigo-600" : defaultColor),
-      title: (selected: boolean) => (selected ? "text-indigo-900" : "text-gray-900"),
-      aiText: (selected: boolean) => (selected ? "text-indigo-800" : "text-gray-600"),
-      pathText: (selected: boolean) => (selected ? "text-indigo-700" : "text-gray-500"),
-      metaText: (selected: boolean) => (selected ? "text-indigo-700" : "text-gray-500"),
-      descText: (selected: boolean) => (selected ? "text-indigo-800" : "text-gray-600"),
-      usageText: (selected: boolean) => (selected ? "text-indigo-700" : "text-gray-500"),
-      tag: (_type: string, selected: boolean) =>
-        selected
-          ? "bg-indigo-100 text-indigo-700 border border-indigo-200"
-          : "bg-gray-100 text-gray-600 border border-gray-200",
-    };
-
-    const skeuo = {
-      card: (selected: boolean) =>
-        `group relative mx-2 my-1.5 px-4 py-3 rounded-xl border cursor-pointer transition-all duration-200 ${
-          selected
-            ? "bg-gradient-to-b from-[#f3f6fb] to-[#e1e9f5] text-[#1f2a44] border-[#c6d4e8] shadow-[0_8px_18px_rgba(20,32,50,0.14)] ring-1 ring-[#d7e2f2]/70"
-            : "bg-gradient-to-b from-[#f9fbfe] to-[#f1f5fb] text-[#222b3a] border-[#e2e8f1] shadow-[0_6px_14px_rgba(20,32,50,0.10)] hover:-translate-y-[1px] hover:shadow-[0_9px_18px_rgba(20,32,50,0.14)]"
-        }`,
-      indicator: (selected: boolean) =>
-        `absolute left-0 top-2 bottom-2 w-[3px] rounded-full transition-opacity ${
-          selected ? "bg-[#8fb1e3] opacity-100 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]" : "bg-[#c6d6ed] opacity-0 group-hover:opacity-80"
-        }`,
-      indexBadge: (selected: boolean) =>
-        `text-[11px] font-semibold flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_2px_6px_rgba(20,32,50,0.12)] ${
-          selected
-            ? "bg-gradient-to-b from-[#e5edf9] to-[#d4e1f2] text-[#22365b]"
-            : "bg-gradient-to-b from-[#f1f6fc] to-[#e2eaf6] text-[#2e3f5f]"
-        }`,
-      iconWrap: (selected: boolean) =>
-        `w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden transition-all duration-200 border ${
-          selected
-            ? "bg-gradient-to-b from-[#edf3fb] to-[#d9e4f5] border-[#c6d4e8] shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_3px_10px_rgba(20,32,50,0.16)]"
-            : "bg-gradient-to-b from-[#fafcfe] to-[#ecf1f8] border-[#e0e7f1] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_2px_7px_rgba(20,32,50,0.12)]"
-        }`,
-      iconColor: (selected: boolean, defaultColor: string) => (selected ? "text-[#2f4670]" : defaultColor),
-      title: (selected: boolean) => (selected ? "text-[#1f2a44]" : "text-[#222b3a]"),
-      aiText: (selected: boolean) => (selected ? "text-[#2e446a]" : "text-[#3c4c64]"),
-      pathText: (selected: boolean) => (selected ? "text-[#3a5174]" : "text-[#4a5a70]"),
-      metaText: (selected: boolean) => (selected ? "text-[#4a6185]" : "text-[#5a6a80]"),
-      descText: (selected: boolean) => (selected ? "text-[#1f2a44]" : "text-[#3b4b63]"),
-      usageText: (selected: boolean) => (selected ? "text-[#3a5174]" : "text-[#5a6a80]"),
-      tag: (_type: string, selected: boolean) =>
-        selected
-          ? "bg-gradient-to-b from-[#e7eef9] to-[#d7e3f3] text-[#1f2a44] border border-[#c1cfe6] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_1px_3px_rgba(20,32,50,0.1)]"
-          : "bg-gradient-to-b from-[#f4f7fc] to-[#e9eef7] text-[#2c3a54] border border-[#d7e1ef] shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]",
-    };
-
-    const soft = {
-      card: (selected: boolean) =>
-        `group relative mx-2 my-1.5 px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 ${
-          selected
-            ? "bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-lg shadow-blue-500/30 scale-[1.02]"
-            : "hover:bg-gray-50 text-gray-700 hover:shadow-md"
-        }`,
-      indicator: (selected: boolean) =>
-        `absolute left-0 top-2 bottom-2 w-1 rounded-full transition-opacity ${
-          selected ? "bg-blue-200 opacity-80" : "opacity-0"
-        }`,
-      indexBadge: (selected: boolean) =>
-        `text-xs font-semibold flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition-all ${
-          selected ? "bg-white/20 text-white backdrop-blur-sm" : "bg-gray-100 text-gray-500 group-hover:bg-gray-200"
-        }`,
-      iconWrap: (selected: boolean) =>
-        `w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden transition-all duration-200 shadow-sm ${
-          selected
-            ? "bg-white/20 backdrop-blur-sm ring-2 ring-white/30"
-            : "bg-gradient-to-br from-gray-50 to-gray-100 group-hover:from-gray-100 group-hover:to-gray-200"
-        }`,
-      iconColor: (selected: boolean, defaultColor: string) => (selected ? "text-white" : defaultColor),
-      title: (selected: boolean) => (selected ? "text-white" : "text-gray-900"),
-      aiText: (selected: boolean) => (selected ? "text-blue-50" : "text-gray-600"),
-      pathText: (selected: boolean) => (selected ? "text-blue-100/90" : "text-gray-500"),
-      metaText: (selected: boolean) => (selected ? "text-purple-200" : "text-gray-400"),
-      descText: (selected: boolean) => (selected ? "text-green-200" : "text-gray-500"),
-      usageText: (selected: boolean) => (selected ? "text-blue-200" : "text-gray-400"),
-      tag: (type: string, selected: boolean) => {
-        const map: Record<string, string> = {
-          url: selected ? "bg-blue-400 text-white" : "bg-blue-100 text-blue-700 border border-blue-200",
-          json_formatter: selected ? "bg-indigo-400 text-white" : "bg-indigo-100 text-indigo-700 border border-indigo-200",
-          memo: selected ? "bg-purple-400 text-white" : "bg-purple-100 text-purple-700 border border-purple-200",
-          everything: selected ? "bg-green-400 text-white" : "bg-green-100 text-green-700 border border-green-200",
-          default: selected ? "bg-white/20 text-white backdrop-blur-sm" : "bg-gray-50 text-gray-600 border border-gray-200",
-        };
-        return map[type] || map.default;
-      },
-    };
-
-    if (resultStyle === "soft") return soft;
-    if (resultStyle === "skeuomorphic") return skeuo;
-    return compact;
-  }, [resultStyle]);
-
-  const layout = useMemo(() => {
-    if (resultStyle === "skeuomorphic") {
-      return {
-        wrapperBg: "linear-gradient(145deg, #eef2f8 0%, #e2e8f3 50%, #f6f8fc 100%)",
-        container: "flex flex-col rounded-2xl shadow-[0_18px_48px_rgba(24,38,62,0.18)] border border-[#c8d5eb] ring-1 ring-[#d7e2f2]/80 bg-gradient-to-b from-[#f8fbff] via-[#eef3fb] to-[#e1e9f5]",
-        header: "px-6 py-4 border-b border-[#dfe6f2] bg-gradient-to-r from-[#f4f7fc] via-[#eef3fb] to-[#f9fbfe] flex-shrink-0 rounded-t-2xl",
-        searchIcon: "w-5 h-5 text-[#6f84aa]",
-        input: "flex-1 text-lg border-none outline-none bg-transparent placeholder-[#95a6c2] text-[#1f2a44]",
-        pluginIcon: (hovering: boolean) => `w-5 h-5 transition-all ${hovering ? "text-[#4468a2] opacity-100 drop-shadow-[0_2px_6px_rgba(68,104,162,0.35)]" : "text-[#7f93b3] opacity-85"}`,
-      };
-    }
-    if (resultStyle === "soft") {
-      return {
-        wrapperBg: "transparent",
-        container: "bg-white flex flex-col rounded-lg shadow-xl",
-        header: "px-6 py-4 border-b border-gray-100 flex-shrink-0",
-        searchIcon: "w-5 h-5 text-gray-400",
-        input: "flex-1 text-lg border-none outline-none bg-transparent placeholder-gray-400 text-gray-700",
-        pluginIcon: (hovering: boolean) => `w-5 h-5 transition-all ${hovering ? "text-blue-600 opacity-100" : "text-gray-400 opacity-70"}`,
-      };
-    }
-    return {
-      wrapperBg: "transparent",
-      container: "bg-white flex flex-col rounded-lg shadow-xl",
-      header: "px-6 py-4 border-b border-gray-100 flex-shrink-0",
-      searchIcon: "w-5 h-5 text-gray-400",
-      input: "flex-1 text-lg border-none outline-none bg-transparent placeholder-gray-400 text-gray-700",
-      pluginIcon: (hovering: boolean) => `w-5 h-5 transition-all ${hovering ? "text-indigo-600 opacity-100" : "text-gray-400 opacity-70"}`,
-    };
-  }, [resultStyle]);
+  const layout = useMemo(() => getLayoutConfig(resultStyle), [resultStyle]);
 
   // Call Ollama API to ask AI (流式请求)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1334,21 +1141,6 @@ export function LauncherWindow() {
     }
   };
 
-  // 判断字符串是否包含中文字符
-  const containsChinese = (text: string): boolean => {
-    return /[\u4E00-\u9FFF]/.test(text);
-  };
-
-  // 粗略判断输入是否像是绝对路径（含盘符、UNC 或根路径）
-  const isLikelyAbsolutePath = (text: string) => {
-    const trimmed = text.trim();
-    if (trimmed.length < 3) return false;
-    const hasSeparator = trimmed.includes("\\") || trimmed.includes("/");
-    const drivePattern = /^[a-zA-Z]:[\\/]/;
-    const uncPattern = /^\\\\/;
-    const rootLike = trimmed.startsWith("/") && hasSeparator;
-    return (drivePattern.test(trimmed) || uncPattern.test(trimmed) || rootLike) && hasSeparator;
-  };
 
   // 处理绝对路径直达：存在则生成一个临时文件结果，减少 Everything/系统目录压力
   const handleDirectPathLookup = async (rawPath: string) => {
@@ -1368,169 +1160,6 @@ export function LauncherWindow() {
     }
   };
 
-  // 判断结果是否为 .lnk 快捷方式
-  const isLnkPath = (result: SearchResult) =>
-    result.path?.toLowerCase().endsWith(".lnk");
-
-  // 相关性评分函数
-  const calculateRelevanceScore = (
-    displayName: string,
-    path: string,
-    query: string,
-    useCount?: number,
-    lastUsed?: number,
-    isEverything?: boolean,
-    isApp?: boolean,  // 新增：标识是否是应用
-    namePinyin?: string,  // 新增：应用名称的拼音全拼
-    namePinyinInitials?: string,  // 新增：应用名称的拼音首字母
-    isFileHistory?: boolean  // 新增：标识是否是历史文件
-  ): number => {
-    if (!query || !query.trim()) {
-      // 如果查询为空，只根据使用频率和时间排序
-      let score = 0;
-      if (useCount !== undefined) {
-        if (isFileHistory) {
-          // 历史文件的使用次数加分更高（最多200分），使用次数越多分数越高
-          score += Math.min(useCount * 2, 200);
-        } else {
-          score += Math.min(useCount, 100); // 最多100分
-        }
-      }
-      if (lastUsed !== undefined) {
-        // 最近使用时间：距离现在越近分数越高
-        // 将时间戳转换为天数，然后计算分数（30天内使用过的有加分）
-        const daysSinceUse = (Date.now() - lastUsed) / (1000 * 60 * 60 * 24);
-        if (daysSinceUse <= 30) {
-          score += Math.max(0, 50 - daysSinceUse * 2); // 30天内：50分递减到0分
-        }
-      }
-      // 历史文件基础加分
-      if (isFileHistory) {
-        score += 300; // 历史文件基础加分（提高到300分）
-      }
-      // 应用类型额外加分
-      if (isApp) {
-        score += 50;
-      }
-      return score;
-    }
-
-    const queryLower = query.toLowerCase().trim();
-    const nameLower = displayName.toLowerCase();
-    const pathLower = path.toLowerCase();
-    const queryLength = queryLower.length;
-    const queryIsPinyin = !containsChinese(queryLower); // 判断查询是否是拼音
-
-    let score = 0;
-
-    // 文件名匹配（最高优先级）
-    let nameMatchScore = 0;
-    if (nameLower === queryLower) {
-      // 完全匹配：短查询（2-4字符）给予更高权重
-      if (queryLength >= 2 && queryLength <= 4) {
-        nameMatchScore = 1500; // 短查询完全匹配给予更高分数
-      } else {
-        nameMatchScore = 1000; // 完全匹配
-      }
-    } else if (nameLower.startsWith(queryLower)) {
-      nameMatchScore = 500; // 开头匹配
-    } else if (nameLower.includes(queryLower)) {
-      nameMatchScore = 100; // 包含匹配
-    }
-    
-    score += nameMatchScore;
-    
-    // 历史文件在文件名匹配时额外加权（匹配分数的30%），确保优先显示
-    if (isFileHistory && nameMatchScore > 0) {
-      score += Math.floor(nameMatchScore * 0.3); // 额外加30%的匹配分数
-    }
-
-    // 拼音匹配（如果查询是拼音且是应用类型）
-    if (queryIsPinyin && isApp && (namePinyin || namePinyinInitials)) {
-      // 拼音全拼匹配
-      if (namePinyin) {
-        if (namePinyin === queryLower) {
-          score += 800; // 拼音完全匹配给予高分
-        } else if (namePinyin.startsWith(queryLower)) {
-          score += 400; // 拼音开头匹配
-        } else if (namePinyin.includes(queryLower)) {
-          score += 150; // 拼音包含匹配
-        }
-      }
-
-      // 拼音首字母匹配
-      if (namePinyinInitials) {
-        if (namePinyinInitials === queryLower) {
-          score += 600; // 拼音首字母完全匹配给予高分
-        } else if (namePinyinInitials.startsWith(queryLower)) {
-          score += 300; // 拼音首字母开头匹配
-        } else if (namePinyinInitials.includes(queryLower)) {
-          score += 120; // 拼音首字母包含匹配
-        }
-      }
-    }
-
-    // 路径匹配（权重较低）
-    if (pathLower.includes(queryLower)) {
-      // 如果文件名已经匹配，路径匹配的权重更低
-      if (score === 0) {
-        score += 10; // 只有路径匹配时给10分
-      } else {
-        score += 5; // 文件名已匹配时只给5分
-      }
-    }
-
-    // 应用类型额外加分（优先显示应用）
-    if (isApp) {
-      // 如果应用名称匹配，给予更高的额外加分
-      if (nameLower === queryLower || nameLower.startsWith(queryLower) || nameLower.includes(queryLower)) {
-        score += 300; // 应用匹配时额外加300分
-      } else if (queryIsPinyin && (namePinyin || namePinyinInitials)) {
-        // 如果是拼音匹配，也给予额外加分
-        if ((namePinyin && (namePinyin === queryLower || namePinyin.startsWith(queryLower) || namePinyin.includes(queryLower))) ||
-            (namePinyinInitials && (namePinyinInitials === queryLower || namePinyinInitials.startsWith(queryLower) || namePinyinInitials.includes(queryLower)))) {
-          score += 300; // 拼音匹配时也额外加300分
-        } else {
-          score += 100; // 即使不匹配也给予基础加分
-        }
-      } else {
-        score += 100; // 即使不匹配也给予基础加分
-      }
-    }
-
-    // Everything 结果：路径深度越浅越好
-    if (isEverything) {
-      const pathDepth = path.split(/[/\\]/).length;
-      // 路径深度越浅，加分越多（最多50分）
-      score += Math.max(0, 50 - pathDepth * 2);
-    }
-
-    // 历史文件结果：给予基础加分，体现使用历史优势
-    if (isFileHistory) {
-      score += 300; // 历史文件基础加分（提高到300分），确保优先于 Everything 结果
-    }
-
-    // 使用频率加分
-    if (useCount !== undefined) {
-      if (isFileHistory) {
-        // 历史文件的使用次数加分更高（最多200分），使用次数越多分数越高
-        score += Math.min(useCount * 2, 200);
-      } else {
-        // 其他类型最多100分
-        score += Math.min(useCount, 100);
-      }
-    }
-
-    // 最近使用时间加分
-    if (lastUsed !== undefined) {
-      const daysSinceUse = (Date.now() - lastUsed) / (1000 * 60 * 60 * 24);
-      if (daysSinceUse <= 30) {
-        score += Math.max(0, 50 - daysSinceUse * 2); // 30天内：50分递减到0分
-      }
-    }
-
-    return score;
-  };
 
   // Combine apps, files, Everything results, and URLs into results when they change
   // 使用 useMemo 优化，避免不必要的重新计算
@@ -1830,8 +1459,8 @@ export function LauncherWindow() {
 
         // Everything 内部快捷方式 (.lnk) 优先
         if (a.type === "everything" && b.type === "everything") {
-          const aLnk = isLnkPath(a);
-          const bLnk = isLnkPath(b);
+          const aLnk = isLnkPath(a.path);
+          const bLnk = isLnkPath(b.path);
           if (aLnk !== bLnk) return aLnk ? -1 : 1;
         }
 
@@ -1917,8 +1546,8 @@ export function LauncherWindow() {
 
         // Everything 内部快捷方式 (.lnk) 优先
         if (a.type === "everything" && b.type === "everything") {
-          const aLnk = isLnkPath(a);
-          const bLnk = isLnkPath(b);
+          const aLnk = isLnkPath(a.path);
+          const bLnk = isLnkPath(b.path);
           if (aLnk !== bLnk) return aLnk ? -1 : 1;
         }
 
@@ -3165,21 +2794,6 @@ export function LauncherWindow() {
     }
   };
 
-  // 根据路径粗略判断是否更像“文件夹”
-  const isFolderLikePath = (path: string | undefined | null): boolean => {
-    if (!path) return false;
-    // 去掉末尾的 / 或 \
-    const normalized = path.replace(/[\\/]+$/, "");
-    const segments = normalized.split(/[\\/]/);
-    const last = segments[segments.length - 1] || "";
-    if (!last) return false;
-    // 如果最后一段里有扩展名（排除以点开头的特殊情况），认为是文件
-    const dotIndex = last.indexOf(".");
-    if (dotIndex > 0 && dotIndex < last.length - 1) {
-      return false;
-    }
-    return true;
-  };
 
   const handleKeyDown = async (e: React.KeyboardEvent) => {
     if (e.key === "Escape" || e.keyCode === 27) {
