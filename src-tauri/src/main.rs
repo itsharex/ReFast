@@ -10,6 +10,7 @@ mod hooks;
 mod hotkey;
 mod hotkey_handler;
 // mod keyboard_hook; // 已不再需要，hotkey_handler 已支持双击修饰键
+mod db;
 mod memos;
 mod open_history;
 mod recording;

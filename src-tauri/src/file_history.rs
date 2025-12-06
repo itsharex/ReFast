@@ -1,5 +1,7 @@
+use crate::db;
 #[cfg(target_os = "windows")]
 use pinyin::ToPinyin;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -29,57 +31,45 @@ pub fn load_history_into(
     state: &mut HashMap<String, FileHistoryItem>,
     app_data_dir: &Path,
 ) -> Result<(), String> {
-    let history_file = get_history_file_path(app_data_dir);
+    let conn = db::get_connection(app_data_dir)?;
+    maybe_migrate_from_json(&conn, app_data_dir)?;
+
     println!(
-        "[后端] file_history.load_history_into: Loading from {:?}",
-        history_file
+        "[后端] file_history.load_history_into: Loading from SQLite at {:?}",
+        db::get_db_path(app_data_dir)
     );
 
-    if !history_file.exists() {
-        println!(
-            "[后端] file_history.load_history_into: History file does not exist, starting fresh"
-        );
-        return Ok(()); // No history file, start fresh
+    let mut stmt = conn
+        .prepare(
+            "SELECT path, name, last_used, use_count, is_folder FROM file_history ORDER BY last_used DESC",
+        )
+        .map_err(|e| format!("Failed to prepare file_history query: {}", e))?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                FileHistoryItem {
+                    path: row.get(0)?,
+                    name: row.get(1)?,
+                    last_used: row.get::<_, i64>(2)? as u64,
+                    use_count: row.get::<_, i64>(3)? as u64,
+                    is_folder: row.get::<_, Option<bool>>(4)?,
+                },
+            ))
+        })
+        .map_err(|e| format!("Failed to iterate file_history rows: {}", e))?;
+
+    state.clear();
+    for row in rows {
+        let (key, item) = row.map_err(|e| format!("Failed to read file_history row: {}", e))?;
+        state.insert(key, item);
     }
 
-    println!("[后端] file_history.load_history_into: Reading file...");
-    let content = match fs::read_to_string(&history_file) {
-        Ok(c) => {
-            println!(
-                "[后端] file_history.load_history_into: File read successfully, {} bytes",
-                c.len()
-            );
-            c
-        }
-        Err(e) => {
-            println!(
-                "[后端] file_history.load_history_into: ERROR reading file: {}",
-                e
-            );
-            return Err(format!("Failed to read history file: {}", e));
-        }
-    };
-
-    println!("[后端] file_history.load_history_into: Parsing JSON...");
-    let history = match serde_json::from_str::<HashMap<String, FileHistoryItem>>(&content) {
-        Ok(h) => {
-            println!(
-                "[后端] file_history.load_history_into: JSON parsed successfully, {} items",
-                h.len()
-            );
-            h
-        }
-        Err(e) => {
-            println!(
-                "[后端] file_history.load_history_into: ERROR parsing JSON: {}",
-                e
-            );
-            return Err(format!("Failed to parse history file: {}", e));
-        }
-    };
-
-    *state = history;
-    println!("[后端] file_history.load_history_into: History loaded into state successfully");
+    println!(
+        "[后端] file_history.load_history_into: History loaded into state successfully ({} items)",
+        state.len()
+    );
 
     Ok(())
 }
@@ -95,20 +85,31 @@ fn save_history_internal(
     state: &HashMap<String, FileHistoryItem>,
     app_data_dir: &Path,
 ) -> Result<(), String> {
-    // Create directory if it doesn't exist
-    if !app_data_dir.exists() {
-        fs::create_dir_all(app_data_dir)
-            .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+    let mut conn = db::get_connection(app_data_dir)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed to start file_history transaction: {}", e))?;
+
+    tx.execute("DELETE FROM file_history", [])
+        .map_err(|e| format!("Failed to clear file_history table: {}", e))?;
+
+    for item in state.values() {
+        tx.execute(
+            "INSERT INTO file_history (path, name, last_used, use_count, is_folder)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                item.path,
+                item.name,
+                item.last_used as i64,
+                item.use_count as i64,
+                item.is_folder
+            ],
+        )
+        .map_err(|e| format!("Failed to insert file_history row: {}", e))?;
     }
 
-    let history_file = get_history_file_path(app_data_dir);
-
-    let history_json = serde_json::to_string_pretty(state)
-        .map_err(|e| format!("Failed to serialize history: {}", e))?;
-
-    fs::write(&history_file, history_json)
-        .map_err(|e| format!("Failed to write history file: {}", e))?;
-
+    tx.commit()
+        .map_err(|e| format!("Failed to commit file_history: {}", e))?;
     Ok(())
 }
 
@@ -120,14 +121,11 @@ pub fn save_history(app_data_dir: &Path) -> Result<(), String> {
 
 /// 获取历史记录条数（必要时从磁盘加载一次）
 pub fn get_history_count(app_data_dir: &Path) -> Result<usize, String> {
-    let mut state = lock_history()?;
-
-    if state.is_empty() {
-        // 如果内存中为空，尝试从磁盘加载
-        load_history_into(&mut state, app_data_dir)?;
-    }
-
-    Ok(state.len())
+    let conn = db::get_connection(app_data_dir)?;
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM file_history", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to count file history: {}", e))?;
+    Ok(count as usize)
 }
 
 pub fn add_file_path(path: String, app_data_dir: &Path) -> Result<(), String> {
@@ -168,6 +166,10 @@ pub fn add_file_path(path: String, app_data_dir: &Path) -> Result<(), String> {
         .as_secs();
 
     let mut state = FILE_HISTORY.lock().map_err(|e| e.to_string())?;
+
+    if state.is_empty() {
+        load_history_into(&mut state, app_data_dir)?;
+    }
 
     // Update or create history item
     if let Some(item) = state.get_mut(&normalized_path_str) {
@@ -327,15 +329,22 @@ pub fn search_in_history(
     results.into_iter().map(|(item, _)| item).collect()
 }
 
-// Legacy function for backward compatibility - but now uses lock_history internally
-pub fn search_file_history(query: &str) -> Vec<FileHistoryItem> {
-    let state = lock_history().unwrap();
-    search_in_history(&state, query)
+// Search helper that ensures data is loaded from SQLite.
+pub fn search_file_history(
+    query: &str,
+    app_data_dir: &Path,
+) -> Result<Vec<FileHistoryItem>, String> {
+    let mut state = lock_history()?;
+    if state.is_empty() {
+        load_history_into(&mut state, app_data_dir)?;
+    }
+    Ok(search_in_history(&state, query))
 }
 
 pub fn delete_file_history(path: String, app_data_dir: &Path) -> Result<(), String> {
     // Lock once, do all operations
     let mut state = lock_history()?;
+    load_history_into(&mut state, app_data_dir)?;
 
     state
         .remove(&path)
@@ -419,6 +428,7 @@ pub fn update_file_history_name(
 
     // Lock once, do all operations
     let mut state = lock_history()?;
+    load_history_into(&mut state, app_data_dir)?;
 
     let item = state
         .get_mut(&path)
@@ -434,6 +444,30 @@ pub fn update_file_history_name(
     save_history_internal(&state_clone, app_data_dir)?;
 
     Ok(item_clone)
+}
+
+fn maybe_migrate_from_json(
+    conn: &rusqlite::Connection,
+    app_data_dir: &Path,
+) -> Result<(), String> {
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM file_history", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to count file_history rows: {}", e))?;
+
+    if count == 0 {
+        let history_file = get_history_file_path(app_data_dir);
+        if history_file.exists() {
+            if let Ok(content) = fs::read_to_string(&history_file) {
+                if let Ok(history) =
+                    serde_json::from_str::<HashMap<String, FileHistoryItem>>(&content)
+                {
+                    let _ = save_history_internal(&history, app_data_dir);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub fn launch_file(path: &str) -> Result<(), String> {

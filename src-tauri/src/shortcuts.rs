@@ -1,3 +1,5 @@
+use crate::db;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -22,41 +24,13 @@ pub fn get_shortcuts_file_path(app_data_dir: &Path) -> PathBuf {
 }
 
 pub fn load_shortcuts(app_data_dir: &Path) -> Result<(), String> {
-    let shortcuts_file = get_shortcuts_file_path(app_data_dir);
-
-    if !shortcuts_file.exists() {
-        return Ok(()); // No shortcuts file, start fresh
-    }
-
-    let content = fs::read_to_string(&shortcuts_file)
-        .map_err(|e| format!("Failed to read shortcuts file: {}", e))?;
-
-    let shortcuts: HashMap<String, ShortcutItem> = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse shortcuts file: {}", e))?;
-
     let mut state = SHORTCUTS.lock().map_err(|e| e.to_string())?;
-    *state = shortcuts;
-
-    Ok(())
+    load_shortcuts_into(&mut state, app_data_dir)
 }
 
 pub fn save_shortcuts(app_data_dir: &Path) -> Result<(), String> {
-    // Create directory if it doesn't exist
-    if !app_data_dir.exists() {
-        fs::create_dir_all(app_data_dir)
-            .map_err(|e| format!("Failed to create app data directory: {}", e))?;
-    }
-
-    let shortcuts_file = get_shortcuts_file_path(app_data_dir);
-
     let state = SHORTCUTS.lock().map_err(|e| e.to_string())?;
-    let shortcuts_json = serde_json::to_string_pretty(&*state)
-        .map_err(|e| format!("Failed to serialize shortcuts: {}", e))?;
-
-    fs::write(&shortcuts_file, shortcuts_json)
-        .map_err(|e| format!("Failed to write shortcuts file: {}", e))?;
-
-    Ok(())
+    save_shortcuts_internal(&state, app_data_dir)
 }
 
 pub fn get_all_shortcuts() -> Vec<ShortcutItem> {
@@ -147,6 +121,103 @@ pub fn delete_shortcut(id: String, app_data_dir: &Path) -> Result<(), String> {
     drop(state);
 
     save_shortcuts(app_data_dir)?;
+
+    Ok(())
+}
+
+fn load_shortcuts_into(
+    state: &mut HashMap<String, ShortcutItem>,
+    app_data_dir: &Path,
+) -> Result<(), String> {
+    let mut conn = db::get_connection(app_data_dir)?;
+    maybe_migrate_from_json(&mut conn, app_data_dir)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, path, icon, created_at, updated_at FROM shortcuts ORDER BY updated_at DESC",
+        )
+        .map_err(|e| format!("Failed to prepare shortcuts query: {}", e))?;
+
+    state.clear();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ShortcutItem {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                path: row.get(2)?,
+                icon: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .map_err(|e| format!("Failed to iterate shortcuts: {}", e))?;
+
+    for item in rows {
+        let item = item.map_err(|e| format!("Failed to read shortcut row: {}", e))?;
+        state.insert(item.id.clone(), item);
+    }
+
+    Ok(())
+}
+
+fn save_shortcuts_internal(
+    state: &HashMap<String, ShortcutItem>,
+    app_data_dir: &Path,
+) -> Result<(), String> {
+    let mut conn = db::get_connection(app_data_dir)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed to start shortcuts transaction: {}", e))?;
+
+    tx.execute("DELETE FROM shortcuts", [])
+        .map_err(|e| format!("Failed to clear shortcuts table: {}", e))?;
+
+    for item in state.values() {
+        tx.execute(
+            "INSERT INTO shortcuts (id, name, path, icon, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                item.id,
+                item.name,
+                item.path,
+                item.icon,
+                item.created_at as i64,
+                item.updated_at as i64
+            ],
+        )
+        .map_err(|e| format!("Failed to insert shortcut {}: {}", item.id, e))?;
+    }
+
+    tx.commit()
+        .map_err(|e| format!("Failed to commit shortcuts: {}", e))?;
+
+    Ok(())
+}
+
+fn maybe_migrate_from_json(
+    conn: &mut rusqlite::Connection,
+    app_data_dir: &Path,
+) -> Result<(), String> {
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM shortcuts", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to count shortcuts: {}", e))?;
+
+    if count == 0 {
+        let json_path = get_shortcuts_file_path(app_data_dir);
+        if json_path.exists() {
+            if let Ok(content) = fs::read_to_string(&json_path) {
+                if let Ok(items) =
+                    serde_json::from_str::<HashMap<String, ShortcutItem>>(&content)
+                {
+                    let mut map = HashMap::new();
+                    for (k, v) in items {
+                        map.insert(k, v);
+                    }
+                    let _ = save_shortcuts_internal(&map, app_data_dir);
+                }
+            }
+        }
+    }
 
     Ok(())
 }

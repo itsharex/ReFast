@@ -82,6 +82,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const [appIndexLoading, setAppIndexLoading] = useState(false);
   const [appIndexError, setAppIndexError] = useState<string | null>(null);
   const [appIndexList, setAppIndexList] = useState<AppInfo[]>([]);
+  const [appIconErrorMap, setAppIconErrorMap] = useState<Record<string, boolean>>({});
   const [appIndexSearch, setAppIndexSearch] = useState("");
   const [fileHistoryItems, setFileHistoryItems] = useState<FileHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -595,6 +596,49 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
       default:
         return "text-gray-600";
     }
+  };
+
+  // 渲染应用图标，加载失败时显示占位图标
+  const renderAppIcon = (app: AppInfo) => {
+    const showFallbackIcon = !app.icon || appIconErrorMap[app.path];
+
+    return (
+      <div className="w-10 h-10 rounded-lg bg-gray-50 border border-gray-200 flex items-center justify-center overflow-hidden flex-shrink-0">
+        {!showFallbackIcon ? (
+          <img
+            src={app.icon}
+            alt={app.name}
+            className="w-8 h-8 object-contain"
+            onError={() =>
+              setAppIconErrorMap((prev) => ({
+                ...prev,
+                [app.path]: true,
+              }))
+            }
+          />
+        ) : (
+          <svg
+            className="w-5 h-5 text-gray-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 6a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"
+            />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M8 10h8m-8 4h5m-5-7h.01"
+            />
+          </svg>
+        )}
+      </div>
+    );
   };
 
   // 渲染当前分类的内容
@@ -1145,10 +1189,11 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
               ) : (
                 <div className="divide-y divide-gray-100">
                   {filteredAppIndexList.map((item, idx) => (
-                    <div key={`${item.path}-${idx}`} className="px-6 py-3 flex items-start gap-3 hover:bg-gray-50">
+                    <div key={`${item.path}-${idx}`} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50">
                       <div className="w-6 h-6 rounded bg-green-50 text-green-700 flex items-center justify-center text-xs flex-shrink-0">
                         {idx + 1}
                       </div>
+                      {renderAppIcon(item)}
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-gray-900">{item.name}</div>
                         <div className="text-xs text-gray-500 break-all mt-1">{item.path}</div>

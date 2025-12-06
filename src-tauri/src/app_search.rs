@@ -142,14 +142,33 @@ pub mod windows {
         apps.sort_by(|a, b| a.path.cmp(&b.path));
         apps.dedup_by(|a, b| a.path == b.path);
 
-        // If still duplicates by name, keep the one with shorter path (usually the main shortcut)
+        // If still duplicates by name, keep the one with better launch target
+        // Prefer real executables/shortcuts (with icons) over shell:AppsFolder URIs
+        fn app_priority(app: &AppInfo) -> u8 {
+            let path = app.path.to_lowercase();
+            if path.ends_with(".exe") {
+                0
+            } else if path.ends_with(".lnk") {
+                1
+            } else if path.starts_with("shell:appsfolder") {
+                3
+            } else {
+                2
+            }
+        }
+
         apps.sort_by(|a, b| {
             let name_cmp = a.name.cmp(&b.name);
-            if name_cmp == std::cmp::Ordering::Equal {
-                a.path.len().cmp(&b.path.len())
-            } else {
-                name_cmp
+            if name_cmp != std::cmp::Ordering::Equal {
+                return name_cmp;
             }
+
+            let priority_cmp = app_priority(a).cmp(&app_priority(b));
+            if priority_cmp != std::cmp::Ordering::Equal {
+                return priority_cmp;
+            }
+
+            a.path.len().cmp(&b.path.len())
         });
         apps.dedup_by(|a, b| a.name == b.name);
 

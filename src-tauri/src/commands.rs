@@ -1,4 +1,5 @@
 use crate::app_search;
+use crate::db;
 use crate::everything_search;
 use crate::file_history;
 use crate::hooks;
@@ -698,8 +699,12 @@ pub fn add_file_to_history(path: String, app: tauri::AppHandle) -> Result<(), St
 }
 
 #[tauri::command]
-pub fn search_file_history(query: String) -> Result<Vec<file_history::FileHistoryItem>, String> {
-    Ok(file_history::search_file_history(&query))
+pub fn search_file_history(
+    query: String,
+    app: tauri::AppHandle,
+) -> Result<Vec<file_history::FileHistoryItem>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    file_history::search_file_history(&query, &app_data_dir)
 }
 
 #[tauri::command]
@@ -1468,15 +1473,15 @@ pub fn get_index_status(app: tauri::AppHandle) -> Result<IndexStatus, String> {
         let apps_total = cache_guard.as_ref().map_or(0, |v| v.len());
         drop(cache_guard);
 
-        // 文件历史索引状态
-        let history_path = file_history::get_history_file_path(&app_data_dir);
-        let history_mtime = fs::metadata(&history_path)
+        // 文件历史索引状态：改为 SQLite 文件
+        let history_db_path = db::get_db_path(&app_data_dir);
+        let history_mtime = fs::metadata(&history_db_path)
             .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs());
         let history_total = file_history::get_history_count(&app_data_dir)?;
-        let history_path_str = history_path.to_str().map(|s| s.to_string());
+        let history_path_str = history_db_path.to_str().map(|s| s.to_string());
 
         Ok(IndexStatus {
             everything: IndexEverythingStatus {

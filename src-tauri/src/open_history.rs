@@ -1,3 +1,5 @@
+use crate::db;
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -29,19 +31,23 @@ pub fn load_history_into(
     state: &mut HashMap<String, u64>,
     app_data_dir: &Path,
 ) -> Result<(), String> {
-    let history_file = get_history_file_path(app_data_dir);
+    let mut conn = db::get_connection(app_data_dir)?;
+    maybe_migrate_from_json(&mut conn, app_data_dir)?;
 
-    if !history_file.exists() {
-        return Ok(()); // No history file, start fresh
+    let mut stmt = conn
+        .prepare("SELECT key, last_opened FROM open_history")
+        .map_err(|e| format!("Failed to prepare open_history query: {}", e))?;
+
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)))
+        .map_err(|e| format!("Failed to iterate open_history rows: {}", e))?;
+
+    state.clear();
+    for row in rows {
+        let (k, v) = row.map_err(|e| format!("Failed to read open_history row: {}", e))?;
+        state.insert(k, v);
     }
 
-    let content = fs::read_to_string(&history_file)
-        .map_err(|e| format!("Failed to read history file: {}", e))?;
-
-    let history: HashMap<String, u64> = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse history file: {}", e))?;
-
-    *state = history;
     Ok(())
 }
 
@@ -56,19 +62,24 @@ fn save_history_internal(
     state: &HashMap<String, u64>,
     app_data_dir: &Path,
 ) -> Result<(), String> {
-    // Create directory if it doesn't exist
-    if !app_data_dir.exists() {
-        fs::create_dir_all(app_data_dir)
-            .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+    let mut conn = db::get_connection(app_data_dir)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Failed to start open_history transaction: {}", e))?;
+
+    tx.execute("DELETE FROM open_history", [])
+        .map_err(|e| format!("Failed to clear open_history table: {}", e))?;
+
+    for (key, ts) in state.iter() {
+        tx.execute(
+            "INSERT INTO open_history (key, last_opened) VALUES (?1, ?2)",
+            params![key, *ts as i64],
+        )
+        .map_err(|e| format!("Failed to insert open_history row: {}", e))?;
     }
 
-    let history_file = get_history_file_path(app_data_dir);
-
-    let history_json = serde_json::to_string_pretty(state)
-        .map_err(|e| format!("Failed to serialize history: {}", e))?;
-
-    fs::write(&history_file, history_json)
-        .map_err(|e| format!("Failed to write history file: {}", e))?;
+    tx.commit()
+        .map_err(|e| format!("Failed to commit open_history: {}", e))?;
 
     Ok(())
 }
@@ -80,18 +91,15 @@ pub fn save_history(app_data_dir: &Path) -> Result<(), String> {
 }
 
 pub fn record_open(key: String, app_data_dir: &Path) -> Result<(), String> {
-    // Load history first to ensure it's up to date
-    {
-        let mut state = lock_history()?;
-        load_history_into(&mut state, app_data_dir).ok(); // Ignore errors if file doesn't exist
-    }
-
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Failed to get timestamp: {}", e))?
         .as_secs();
 
     let mut state = lock_history()?;
+    if state.is_empty() {
+        load_history_into(&mut state, app_data_dir).ok();
+    }
     state.insert(key, timestamp);
     drop(state);
 
@@ -110,5 +118,27 @@ pub fn get_all_history(app_data_dir: &Path) -> Result<HashMap<String, u64>, Stri
     let mut state = lock_history()?;
     load_history_into(&mut state, app_data_dir).ok(); // Ignore errors if file doesn't exist
     Ok(state.clone())
+}
+
+fn maybe_migrate_from_json(
+    conn: &mut rusqlite::Connection,
+    app_data_dir: &Path,
+) -> Result<(), String> {
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM open_history", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to count open_history rows: {}", e))?;
+
+    if count == 0 {
+        let json_path = get_history_file_path(app_data_dir);
+        if json_path.exists() {
+            if let Ok(content) = fs::read_to_string(&json_path) {
+                if let Ok(history) = serde_json::from_str::<HashMap<String, u64>>(&content) {
+                    let _ = save_history_internal(&history, app_data_dir);
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
