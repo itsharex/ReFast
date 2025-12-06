@@ -1310,6 +1310,10 @@ export function LauncherWindow() {
     return /[\u4E00-\u9FFF]/.test(text);
   };
 
+  // 判断结果是否为 .lnk 快捷方式
+  const isLnkPath = (result: SearchResult) =>
+    result.path?.toLowerCase().endsWith(".lnk");
+
   // 相关性评分函数
   const calculateRelevanceScore = (
     displayName: string,
@@ -1701,6 +1705,17 @@ export function LauncherWindow() {
           b.type === "file"  // 新增：标识是否是历史文件
         );
 
+        // Everything 内部快捷方式 (.lnk) 优先
+        if (a.type === "everything" && b.type === "everything") {
+          const aLnk = isLnkPath(a);
+          const bLnk = isLnkPath(b);
+          if (aLnk !== bLnk) return aLnk ? -1 : 1;
+        }
+
+        // 历史文件始终优先于 Everything（即使分数更低）
+        if (a.type === "file" && b.type === "everything") return -1;
+        if (a.type === "everything" && b.type === "file") return 1;
+
         // 按评分降序排序（分数高的在前）
         if (bScore !== aScore) {
           // 如果评分差距在200分以内，且一个是历史文件，另一个是 Everything 结果，优先历史文件
@@ -1776,6 +1791,17 @@ export function LauncherWindow() {
           b.app?.name_pinyin_initials,  // 新增：应用拼音首字母
           b.type === "file"  // 新增：标识是否是历史文件
         );
+
+        // Everything 内部快捷方式 (.lnk) 优先
+        if (a.type === "everything" && b.type === "everything") {
+          const aLnk = isLnkPath(a);
+          const bLnk = isLnkPath(b);
+          if (aLnk !== bLnk) return aLnk ? -1 : 1;
+        }
+
+        // 历史文件始终优先于 Everything（即使分数更低）
+        if (a.type === "file" && b.type === "everything") return -1;
+        if (a.type === "everything" && b.type === "file") return 1;
 
         // 按评分降序排序（分数高的在前）
         if (bScore !== aScore) {
