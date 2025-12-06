@@ -10,13 +10,17 @@ use crate::settings;
 use crate::shortcuts;
 use crate::window_config;
 use std::env;
+use base64::{engine::general_purpose, Engine as _};
+use chrono::{DateTime, Utc};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 use regex::Regex;
 use tauri::{Emitter, Manager};
+use serde::Serialize;
 
 static RECORDING_STATE: LazyLock<Arc<Mutex<RecordingState>>> =
     LazyLock::new(|| Arc::new(Mutex::new(RecordingState::new())));
@@ -1054,6 +1058,355 @@ pub fn get_everything_log_file_path() -> Result<Option<String>, String> {
     #[cfg(not(target_os = "windows"))]
     {
         Ok(None)
+    }
+}
+
+#[derive(Serialize)]
+pub struct FilePreviewMetadata {
+    pub duration_ms: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct FilePreview {
+    pub kind: String,
+    pub size: Option<u64>,
+    pub modified: Option<String>,
+    pub extension: Option<String>,
+    pub mime: Option<String>,
+    pub content: Option<String>,
+    #[serde(rename = "imageDataUrl")]
+    pub image_data_url: Option<String>,
+    pub truncated: bool,
+    pub metadata: Option<FilePreviewMetadata>,
+    pub error: Option<String>,
+}
+
+fn guess_mime_from_extension(ext: Option<&str>) -> Option<&'static str> {
+    match ext {
+        Some("png") => Some("image/png"),
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("bmp") => Some("image/bmp"),
+        Some("webp") => Some("image/webp"),
+        Some("svg") => Some("image/svg+xml"),
+        Some("mp3") => Some("audio/mpeg"),
+        Some("wav") => Some("audio/wav"),
+        Some("flac") => Some("audio/flac"),
+        Some("mp4") => Some("video/mp4"),
+        Some("mov") => Some("video/quicktime"),
+        Some("mkv") => Some("video/x-matroska"),
+        Some("webm") => Some("video/webm"),
+        Some("avi") => Some("video/x-msvideo"),
+        Some("ogg") => Some("application/ogg"),
+        Some("aac") => Some("audio/aac"),
+        Some("txt") => Some("text/plain"),
+        Some("md") => Some("text/markdown"),
+        Some("json") => Some("application/json"),
+        Some("yaml") | Some("yml") => Some("text/yaml"),
+        Some("html") | Some("htm") => Some("text/html"),
+        Some("css") => Some("text/css"),
+        Some("js") => Some("application/javascript"),
+        Some("ts") | Some("tsx") => Some("text/typescript"),
+        Some("rs") => Some("text/plain"),
+        _ => None,
+    }
+}
+
+fn is_image_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico"
+    )
+}
+
+fn is_media_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "mp4" | "mov" | "mkv" | "avi" | "webm"
+    )
+}
+
+fn is_text_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        "txt"
+            | "md"
+            | "json"
+            | "jsonc"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "ini"
+            | "xml"
+            | "html"
+            | "htm"
+            | "css"
+            | "scss"
+            | "less"
+            | "js"
+            | "jsx"
+            | "ts"
+            | "tsx"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "rs"
+            | "go"
+            | "py"
+            | "rb"
+            | "java"
+            | "kt"
+            | "swift"
+            | "php"
+            | "sql"
+            | "csv"
+            | "log"
+    )
+}
+
+fn is_probably_binary(buffer: &[u8]) -> bool {
+    buffer.iter().take(2048).any(|&b| b == 0)
+}
+
+#[tauri::command]
+pub fn get_file_preview(path: String) -> Result<FilePreview, String> {
+    let path_ref = Path::new(&path);
+    let metadata =
+        fs::metadata(path_ref).map_err(|e| format!("无法读取文件信息: {}", e.to_string()))?;
+
+    let modified: Option<String> = metadata.modified().ok().map(|time| {
+        let datetime: DateTime<Utc> = time.into();
+        datetime.to_rfc3339()
+    });
+
+    let extension = path_ref
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|s| s.to_lowercase());
+
+    let mime = guess_mime_from_extension(extension.as_deref()).map(|s| s.to_string());
+    let size = if metadata.is_file() {
+        Some(metadata.len())
+    } else {
+        None
+    };
+
+    if metadata.is_dir() {
+        return Ok(FilePreview {
+            kind: "folder".to_string(),
+            size,
+            modified,
+            extension,
+            mime,
+            content: None,
+            image_data_url: None,
+            truncated: false,
+            metadata: None,
+            error: None,
+        });
+    }
+
+    if let Some(ext_ref) = extension.as_deref() {
+        if is_image_extension(ext_ref) {
+            let max_preview_bytes: u64 = 200 * 1024;
+            let mut file =
+                fs::File::open(path_ref).map_err(|e| format!("无法打开文件: {}", e.to_string()))?;
+            let mut buffer: Vec<u8> = Vec::new();
+            let read_bytes = file
+                .by_ref()
+                .take(max_preview_bytes)
+                .read_to_end(&mut buffer)
+                .map_err(|e| format!("读取文件失败: {}", e.to_string()))?;
+            let truncated = size.map_or(false, |s| s > read_bytes as u64);
+
+            let data_url = format!(
+                "data:{};base64,{}",
+                mime.clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+                general_purpose::STANDARD.encode(&buffer)
+            );
+
+            return Ok(FilePreview {
+                kind: "image".to_string(),
+                size,
+                modified,
+                extension,
+                mime,
+                content: None,
+                image_data_url: Some(data_url),
+                truncated,
+                metadata: None,
+                error: None,
+            });
+        }
+    }
+
+    let max_preview_bytes: u64 = 32 * 1024;
+    let mut file = fs::File::open(path_ref)
+        .map_err(|e| format!("无法打开文件: {}", e.to_string()))?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let read_bytes = file
+        .by_ref()
+        .take(max_preview_bytes)
+        .read_to_end(&mut buffer)
+        .map_err(|e| format!("读取文件失败: {}", e.to_string()))?;
+    let truncated = size.map_or(false, |s| s > read_bytes as u64);
+
+    let is_text = extension
+        .as_deref()
+        .map(is_text_extension)
+        .unwrap_or(false)
+        || !is_probably_binary(&buffer);
+
+    if is_text {
+        let content = String::from_utf8_lossy(&buffer).to_string();
+        return Ok(FilePreview {
+            kind: "text".to_string(),
+            size,
+            modified,
+            extension,
+            mime,
+            content: Some(content),
+            image_data_url: None,
+            truncated,
+            metadata: None,
+            error: None,
+        });
+    }
+
+    if let Some(ext_ref) = extension.as_deref() {
+        if is_media_extension(ext_ref) {
+            return Ok(FilePreview {
+                kind: "media".to_string(),
+                size,
+                modified,
+                extension,
+                mime,
+                content: None,
+                image_data_url: None,
+                truncated,
+                metadata: Some(FilePreviewMetadata {
+                    duration_ms: None,
+                    width: None,
+                    height: None,
+                }),
+                error: None,
+            });
+        }
+    }
+
+    Ok(FilePreview {
+        kind: "binary".to_string(),
+        size,
+        modified,
+        extension,
+        mime,
+        content: None,
+        image_data_url: None,
+        truncated,
+        metadata: None,
+        error: None,
+    })
+}
+
+#[derive(Serialize)]
+pub struct IndexEverythingStatus {
+    pub available: bool,
+    pub error: Option<String>,
+    pub version: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct IndexApplicationsStatus {
+    pub total: usize,
+    pub cache_file: Option<String>,
+    pub cache_mtime: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct IndexFileHistoryStatus {
+    pub total: usize,
+    pub path: Option<String>,
+    pub mtime: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct IndexStatus {
+    pub everything: IndexEverythingStatus,
+    pub applications: IndexApplicationsStatus,
+    pub file_history: IndexFileHistoryStatus,
+}
+
+/// 聚合索引状态，便于前端一次性获取
+#[tauri::command]
+pub fn get_index_status(app: tauri::AppHandle) -> Result<IndexStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let app_data_dir = get_app_data_dir(&app)?;
+
+        // Everything 状态
+        let (available, error) = everything_search::windows::check_everything_status();
+        let version = everything_search::windows::get_everything_version();
+        let path = everything_search::windows::get_everything_path()
+            .map(|p| p.to_string_lossy().to_string());
+
+        // 应用索引状态：缓存数量与文件时间
+        let cache_file_path = app_search::windows::get_cache_file_path(&app_data_dir);
+        let cache_mtime = fs::metadata(&cache_file_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let cache_file = cache_file_path.to_str().map(|s| s.to_string());
+
+        let cache = APP_CACHE.clone();
+        let mut cache_guard = cache.lock().map_err(|e| e.to_string())?;
+        if cache_guard.is_none() {
+            if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
+                if !disk_cache.is_empty() {
+                    *cache_guard = Some(disk_cache);
+                }
+            }
+        }
+        let apps_total = cache_guard.as_ref().map_or(0, |v| v.len());
+        drop(cache_guard);
+
+        // 文件历史索引状态
+        let history_path = file_history::get_history_file_path(&app_data_dir);
+        let history_mtime = fs::metadata(&history_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+        let history_total = file_history::get_history_count(&app_data_dir)?;
+        let history_path_str = history_path.to_str().map(|s| s.to_string());
+
+        Ok(IndexStatus {
+            everything: IndexEverythingStatus {
+                available,
+                error,
+                version,
+                path,
+            },
+            applications: IndexApplicationsStatus {
+                total: apps_total,
+                cache_file,
+                cache_mtime,
+            },
+            file_history: IndexFileHistoryStatus {
+                total: history_total,
+                path: history_path_str,
+                mtime: history_mtime,
+            },
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("get_index_status is only supported on Windows".to_string())
     }
 }
 

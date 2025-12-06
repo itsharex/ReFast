@@ -118,6 +118,18 @@ pub fn save_history(app_data_dir: &Path) -> Result<(), String> {
     save_history_internal(&state, app_data_dir)
 }
 
+/// 获取历史记录条数（必要时从磁盘加载一次）
+pub fn get_history_count(app_data_dir: &Path) -> Result<usize, String> {
+    let mut state = lock_history()?;
+
+    if state.is_empty() {
+        // 如果内存中为空，尝试从磁盘加载
+        load_history_into(&mut state, app_data_dir)?;
+    }
+
+    Ok(state.len())
+}
+
 pub fn add_file_path(path: String, app_data_dir: &Path) -> Result<(), String> {
     // Normalize path: trim whitespace and remove trailing backslashes/slashes
     let trimmed = path.trim();
@@ -377,7 +389,9 @@ pub fn launch_file(path: &str) -> Result<(), String> {
     {
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::Shell::{
+            ShellExecuteExW, SHELLEXECUTEINFOW, SHELLEXECUTEINFOW_0,
+        };
         
         // Special handling for control command (traditional Control Panel)
         if trimmed == "control" {
@@ -423,21 +437,39 @@ pub fn launch_file(path: &str) -> Result<(), String> {
             .chain(Some(0))
             .collect();
         
-        // Use ShellExecuteW to open file/folder without showing command prompt
-        let result = unsafe {
-            ShellExecuteW(
-                0, // hwnd - no parent window
-                std::ptr::null(), // lpOperation - NULL means "open"
-                path_wide.as_ptr(), // lpFile
-                std::ptr::null(), // lpParameters
-                std::ptr::null(), // lpDirectory
-                1, // nShowCmd - SW_SHOWNORMAL (1)
-            )
+        // Use ShellExecuteExW for better error handling and control
+        // This provides more detailed error information than ShellExecuteW
+        let mut exec_info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: 0, // No special flags needed
+            hwnd: 0, // No parent window
+            lpVerb: std::ptr::null(), // NULL means "open"
+            lpFile: path_wide.as_ptr(),
+            lpParameters: std::ptr::null(),
+            lpDirectory: std::ptr::null(),
+            nShow: 1, // SW_SHOWNORMAL
+            hInstApp: 0,
+            lpIDList: std::ptr::null_mut(),
+            lpClass: std::ptr::null(),
+            hkeyClass: 0,
+            dwHotKey: 0,
+            Anonymous: SHELLEXECUTEINFOW_0 { hIcon: 0 },
+            hProcess: 0,
         };
         
-        // ShellExecuteW returns a value > 32 on success
-        if result as i32 <= 32 {
-            return Err(format!("Failed to open path: {} (error code: {})", path_str, result as i32));
+        let result = unsafe {
+            ShellExecuteExW(&mut exec_info)
+        };
+        
+        // ShellExecuteExW returns non-zero (TRUE) on success
+        if result == 0 {
+            // Get last error for more detailed error message
+            use windows_sys::Win32::Foundation::GetLastError;
+            let error_code = unsafe { GetLastError() };
+            return Err(format!(
+                "Failed to open path: {} (error code: {})",
+                path_str, error_code
+            ));
         }
     }
 

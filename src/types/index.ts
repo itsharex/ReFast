@@ -61,6 +61,59 @@ export interface EverythingSearchResponse {
   total_count: number;
 }
 
+export interface IndexEverythingStatus {
+  available: boolean;
+  error?: string | null;
+  version?: string | null;
+  path?: string | null;
+}
+
+export interface IndexApplicationsStatus {
+  total: number;
+  cache_file?: string | null;
+  cache_mtime?: number | null;
+}
+
+export interface IndexFileHistoryStatus {
+  total: number;
+  path?: string | null;
+  mtime?: number | null;
+}
+
+export interface IndexStatus {
+  everything: IndexEverythingStatus;
+  applications: IndexApplicationsStatus;
+  file_history: IndexFileHistoryStatus;
+}
+
+export type FilePreviewKind =
+  | "text"
+  | "image"
+  | "media"
+  | "binary"
+  | "folder"
+  | "unsupported"
+  | "error";
+
+export interface FilePreviewMetadata {
+  duration_ms?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface FilePreview {
+  kind: FilePreviewKind;
+  size?: number;
+  modified?: string;
+  extension?: string;
+  mime?: string;
+  content?: string;
+  imageDataUrl?: string;
+  truncated?: boolean;
+  metadata?: FilePreviewMetadata;
+  error?: string;
+}
+
 export interface SystemFolderItem {
   name: string;
   path: string;

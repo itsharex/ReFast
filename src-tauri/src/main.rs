@@ -502,6 +502,8 @@ fn main() {
             get_everything_path,
             get_everything_version,
             get_everything_log_file_path,
+            get_file_preview,
+            get_index_status,
             start_everything,
             open_everything_download,
             download_everything,

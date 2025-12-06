@@ -7,6 +7,8 @@ import type {
   ShortcutItem,
   MemoItem,
   SystemFolderItem,
+  IndexStatus,
+  FilePreview,
 } from "../types";
 
 export const tauriApi = {
@@ -122,6 +124,10 @@ export const tauriApi = {
     };
   },
 
+  async getIndexStatus(): Promise<IndexStatus> {
+    return invoke("get_index_status");
+  },
+
   async getEverythingPath(): Promise<string | null> {
     return invoke("get_everything_path");
   },
@@ -132,6 +138,10 @@ export const tauriApi = {
 
   async getEverythingLogFilePath(): Promise<string | null> {
     return invoke("get_everything_log_file_path");
+  },
+
+  async getFilePreview(path: string): Promise<FilePreview> {
+    return invoke("get_file_preview", { path });
   },
 
   async openEverythingDownload(): Promise<void> {
