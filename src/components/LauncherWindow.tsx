@@ -481,6 +481,74 @@ export function LauncherWindow() {
     loadOpenHistory();
   }, []);
 
+  // 监听插件快捷键（通过后端全局监听）
+  const lastTriggeredRef = useRef<{ pluginId: string; time: number } | null>(null);
+  
+  useEffect(() => {
+    // 监听后端发送的插件快捷键触发事件
+    let unsubscribeTriggered: (() => void) | null = null;
+    let unsubscribeUpdated: (() => void) | null = null;
+    
+    const setupListeners = async () => {
+      // 监听插件快捷键触发事件（从后端发送）
+      unsubscribeTriggered = await listen<string>("plugin-hotkey-triggered", async (event) => {
+        const pluginId = event.payload;
+        
+        // 前端防抖：检查是否在 200ms 内重复触发同一个插件
+        const now = Date.now();
+        if (lastTriggeredRef.current) {
+          const { pluginId: lastId, time: lastTime } = lastTriggeredRef.current;
+          if (lastId === pluginId && now - lastTime < 200) {
+            console.log(`[PluginHotkeys] ⚠️ Ignored duplicate trigger for plugin: ${pluginId} (within 200ms)`);
+            return;
+          }
+        }
+        
+        // 记录触发时间和插件 ID
+        lastTriggeredRef.current = { pluginId, time: now };
+        
+        console.log(`[PluginHotkeys] ✅ Hotkey triggered for plugin: ${pluginId}`);
+        
+        try {
+          const pluginContext: PluginContext = {
+            setQuery,
+            setSelectedIndex,
+            hideLauncher: async () => {
+              const window = await getCurrentWindow();
+              await window.hide();
+            },
+            tauriApi,
+          };
+          await executePlugin(pluginId, pluginContext);
+          console.log(`[PluginHotkeys] ✅ Plugin ${pluginId} executed successfully`);
+        } catch (error) {
+          console.error(`[PluginHotkeys] ❌ Failed to execute plugin ${pluginId}:`, error);
+        }
+      });
+      
+      // 监听插件快捷键更新事件
+      unsubscribeUpdated = await listen<Record<string, { modifiers: string[]; key: string }>>(
+        "plugin-hotkeys-updated",
+        (event) => {
+          console.log("[PluginHotkeys] Updated plugin hotkeys:", Object.keys(event.payload).length, "plugins");
+        }
+      );
+    };
+    
+    setupListeners().catch((error) => {
+      console.error("[PluginHotkeys] Failed to setup listeners:", error);
+    });
+
+    return () => {
+      if (unsubscribeTriggered) {
+        unsubscribeTriggered();
+      }
+      if (unsubscribeUpdated) {
+        unsubscribeUpdated();
+      }
+    };
+  }, []);
+
   // Listen for Everything download progress events
   useEffect(() => {
     if (!isDownloadingEverything) return;
@@ -2453,25 +2521,84 @@ export function LauncherWindow() {
   const loadApplications = async (forceRescan: boolean = false) => {
     try {
       setIsLoading(true);
-      await new Promise<void>((resolve) => {
-        setTimeout(async () => {
-          try {
-            const allApps = forceRescan 
-              ? await tauriApi.rescanApplications()
-              : await tauriApi.scanApplications();
-            console.log(`[DEBUG] Loaded ${allApps.length} applications, forceRescan=${forceRescan}`);
-            setApps(allApps);
-            setFilteredApps(allApps.slice(0, 10));
-          } catch (error) {
-            console.error("Failed to load applications:", error);
-            setApps([]);
-            setFilteredApps([]);
-          } finally {
+      
+      if (forceRescan) {
+        // 重新扫描：通过事件监听获取结果
+        await new Promise<void>((resolve, reject) => {
+          let unlistenComplete: (() => void) | null = null;
+          let unlistenError: (() => void) | null = null;
+          
+          const setupListeners = async () => {
+            // 监听扫描完成事件
+            unlistenComplete = await listen<{ apps: AppInfo[] }>("app-rescan-complete", (event) => {
+              const { apps } = event.payload;
+              console.log(`[DEBUG] Rescanned ${apps.length} applications`);
+              setApps(apps);
+              setFilteredApps(apps.slice(0, 10));
+              setIsLoading(false);
+              
+              // 清理监听器
+              if (unlistenComplete) unlistenComplete();
+              if (unlistenError) unlistenError();
+              
+              resolve();
+            });
+
+            // 监听扫描错误事件
+            unlistenError = await listen<{ error: string }>("app-rescan-error", (event) => {
+              const { error } = event.payload;
+              console.error("应用重新扫描失败:", error);
+              setApps([]);
+              setFilteredApps([]);
+              setIsLoading(false);
+              
+              // 清理监听器
+              if (unlistenComplete) unlistenComplete();
+              if (unlistenError) unlistenError();
+              
+              reject(new Error(error));
+            });
+          };
+
+          setupListeners().then(() => {
+            // 启动重新扫描
+            tauriApi.rescanApplications().catch((error) => {
+              console.error("Failed to start rescan:", error);
+              setApps([]);
+              setFilteredApps([]);
+              setIsLoading(false);
+              
+              // 清理监听器
+              if (unlistenComplete) unlistenComplete();
+              if (unlistenError) unlistenError();
+              
+              reject(error);
+            });
+          }).catch((error) => {
             setIsLoading(false);
-            resolve();
-          }
-        }, 0);
-      });
+            reject(error);
+          });
+        });
+      } else {
+        // 正常扫描：直接返回结果
+        await new Promise<void>((resolve) => {
+          setTimeout(async () => {
+            try {
+              const allApps = await tauriApi.scanApplications();
+              console.log(`[DEBUG] Loaded ${allApps.length} applications`);
+              setApps(allApps);
+              setFilteredApps(allApps.slice(0, 10));
+            } catch (error) {
+              console.error("Failed to load applications:", error);
+              setApps([]);
+              setFilteredApps([]);
+            } finally {
+              setIsLoading(false);
+              resolve();
+            }
+          }, 0);
+        });
+      }
     } catch (error) {
       console.error("Failed to load applications:", error);
       setApps([]);
@@ -2516,6 +2643,53 @@ export function LauncherWindow() {
       }
     }
   };
+
+  // 监听图标更新事件，收到后刷新搜索结果中的图标
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupListener = async () => {
+      try {
+        unlisten = await listen<Array<[string, string]>>("app-icons-updated", (event) => {
+          const iconUpdates = event.payload;
+          
+          // 更新 filteredApps 中的图标
+          setFilteredApps((prevApps) => {
+            const updatedApps = prevApps.map((app) => {
+              const iconUpdate = iconUpdates.find(([path]) => path === app.path);
+              if (iconUpdate) {
+                return { ...app, icon: iconUpdate[1] };
+              }
+              return app;
+            });
+            return updatedApps;
+          });
+
+          // 同时更新 apps 缓存中的图标
+          setApps((prevApps) => {
+            const updatedApps = prevApps.map((app) => {
+              const iconUpdate = iconUpdates.find(([path]) => path === app.path);
+              if (iconUpdate) {
+                return { ...app, icon: iconUpdate[1] };
+              }
+              return app;
+            });
+            return updatedApps;
+          });
+        });
+      } catch (error) {
+        console.error("Failed to setup app-icons-updated listener:", error);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   const searchFileHistory = async (searchQuery: string) => {
     try {

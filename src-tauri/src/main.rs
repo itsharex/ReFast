@@ -27,6 +27,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{
     menu::{Menu, MenuItem},
     Manager,
+    Emitter,
 };
 use std::sync::{Arc, Mutex};
 
@@ -419,6 +420,53 @@ fn main() {
                 // 如果保留此代码，会导致双击 Ctrl 和 Alt 都会触发，造成冲突
             }
 
+            // 启动插件快捷键监听器
+            #[cfg(target_os = "windows")]
+            {
+                use std::sync::mpsc;
+                
+                let app_handle_plugin = app.handle().clone();
+                let (tx_plugin, rx_plugin) = mpsc::channel();
+                
+                // 在启动监听器之前先克隆 sender，用于注册快捷键
+                let tx_plugin_reg = tx_plugin.clone();
+                
+                // 启动多快捷键监听器
+                match hotkey_handler::windows::start_multi_hotkey_listener(tx_plugin) {
+                    Ok(_handle) => {
+                        // 在后台线程中监听插件快捷键事件
+                        std::thread::spawn(move || {
+                            while let Ok(plugin_id) = rx_plugin.recv() {
+                                // 发送事件到前端
+                                if let Err(e) = app_handle_plugin.emit("plugin-hotkey-triggered", plugin_id) {
+                                    eprintln!("[Main] Failed to emit plugin-hotkey-triggered event: {}", e);
+                                }
+                            }
+                        });
+                        
+                        // 加载并注册所有插件快捷键
+                        let app_data_dir_plugin = app_data_dir.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(500)); // 等待监听器完全启动
+                            if let Ok(settings) = settings::load_settings(&app_data_dir_plugin) {
+                                let plugin_hotkeys = settings.plugin_hotkeys.clone();
+                                let hotkey_count = plugin_hotkeys.len();
+                                if !plugin_hotkeys.is_empty() {
+                                    if let Err(e) = hotkey_handler::windows::update_plugin_hotkeys(plugin_hotkeys) {
+                                        eprintln!("[Main] Failed to register plugin hotkeys: {}", e);
+                                    } else {
+                                        eprintln!("[Main] Registered {} plugin hotkeys", hotkey_count);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("[Main] Failed to start multi-hotkey listener: {}", e);
+                    }
+                }
+            }
+
             // Load file history on startup
             file_history::load_history(&app_data_dir).ok(); // Ignore errors if file doesn't exist
             open_history::load_history(&app_data_dir).ok(); // Ignore errors if file doesn't exist
@@ -562,6 +610,9 @@ fn main() {
             set_startup_enabled,
             get_hotkey_config,
             save_hotkey_config,
+            get_plugin_hotkeys,
+            save_plugin_hotkeys,
+            save_plugin_hotkey,
             show_hotkey_settings,
             restart_app,
             get_app_version,

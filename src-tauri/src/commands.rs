@@ -640,56 +640,66 @@ pub async fn search_applications(
     .await
     .map_err(|e| format!("搜索任务失败: {}", e))??;
 
-    // Icons are extracted asynchronously in background - don't block search
-    // This prevents UI freezing when PowerShell commands take time
-
-    // Extract icons for top results asynchronously in background (non-blocking)
+    // 在后台异步提取图标，提取完成后通过事件通知前端刷新
     let cache_clone = cache.clone();
+    let app_handle_for_emit = app_handle_clone.clone();
+    let app_handle_for_save = app_handle_clone.clone();
     let results_paths: Vec<String> = results
         .iter()
-        .take(5)
         .filter(|r| r.icon.is_none())
         .map(|r| r.path.clone())
         .collect();
-    std::thread::spawn(move || {
-        let mut updated = false;
+    
+    if !results_paths.is_empty() {
+        std::thread::spawn(move || {
+            let mut updated_icons: Vec<(String, String)> = Vec::new(); // (path, icon_data)
+            let mut updated = false;
 
-        // Get current cache
-        if let Ok(mut guard) = cache_clone.lock() {
-            if let Some(ref mut apps) = *guard {
-                // Update icons for remaining search results
-                for path_str in results_paths {
-                    let path = std::path::Path::new(&path_str);
-                    let ext = path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.to_lowercase());
-                    let icon = if ext == Some("lnk".to_string()) {
-                        app_search::windows::extract_lnk_icon_base64(path)
-                    } else if ext == Some("exe".to_string()) {
-                        app_search::windows::extract_icon_base64(path)
-                    } else {
-                        None
-                    };
+            // Get current cache
+            if let Ok(mut guard) = cache_clone.lock() {
+                if let Some(ref mut apps) = *guard {
+                    // 提取所有缺失的图标
+                    for path_str in results_paths {
+                        let path = std::path::Path::new(&path_str);
+                        let ext = path
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_lowercase());
+                        let icon = if ext == Some("lnk".to_string()) {
+                            app_search::windows::extract_lnk_icon_base64(path)
+                        } else if ext == Some("exe".to_string()) {
+                            app_search::windows::extract_icon_base64(path)
+                        } else {
+                            None
+                        };
 
-                    if let Some(icon) = icon {
-                        // Update in cache
-                        if let Some(app) = apps.iter_mut().find(|a| a.path == path_str) {
-                            app.icon = Some(icon);
-                            updated = true;
+                        if let Some(icon_data) = icon {
+                            // Update in cache
+                            if let Some(app) = apps.iter_mut().find(|a| a.path == path_str) {
+                                app.icon = Some(icon_data.clone());
+                                updated_icons.push((path_str.clone(), icon_data));
+                                updated = true;
+                            }
+                        }
+                    }
+
+                    // Save to disk if updated
+                    if updated {
+                        if let Ok(app_data_dir) = get_app_data_dir(&app_handle_for_save) {
+                            let _ = app_search::windows::save_cache(&app_data_dir, apps);
                         }
                     }
                 }
+            }
 
-                // Save to disk if updated
-                if updated {
-                    if let Ok(app_data_dir) = get_app_data_dir(&app_handle_clone) {
-                        let _ = app_search::windows::save_cache(&app_data_dir, apps);
-                    }
+            // 发送事件通知前端图标已更新
+            if !updated_icons.is_empty() {
+                if let Err(e) = app_handle_for_emit.emit("app-icons-updated", updated_icons) {
+                    eprintln!("Failed to emit app-icons-updated event: {}", e);
                 }
             }
-        }
-    });
+        });
+    }
 
     Ok(results)
 }
@@ -3455,6 +3465,83 @@ pub async fn show_hotkey_settings(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     println!("[后端] show_hotkey_settings: END");
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_plugin_hotkeys(app: tauri::AppHandle) -> Result<std::collections::HashMap<String, settings::HotkeyConfig>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let settings = settings::load_settings(&app_data_dir)?;
+    Ok(settings.plugin_hotkeys)
+}
+
+#[tauri::command]
+pub fn save_plugin_hotkeys(
+    app: tauri::AppHandle,
+    plugin_hotkeys: std::collections::HashMap<String, settings::HotkeyConfig>,
+) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let mut settings = settings::load_settings(&app_data_dir)?;
+    settings.plugin_hotkeys = plugin_hotkeys.clone();
+    settings::save_settings(&app_data_dir, &settings)?;
+    
+    // 更新后端快捷键注册
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(e) = crate::hotkey_handler::windows::update_plugin_hotkeys(plugin_hotkeys.clone()) {
+            eprintln!("Failed to update plugin hotkeys: {}", e);
+        }
+        
+        // 通知前端更新插件快捷键（通过事件）
+        if let Err(e) = app.emit("plugin-hotkeys-updated", plugin_hotkeys) {
+            eprintln!("Failed to emit plugin-hotkeys-updated event: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_plugin_hotkey(
+    app: tauri::AppHandle,
+    plugin_id: String,
+    config: Option<settings::HotkeyConfig>,
+) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let mut settings = settings::load_settings(&app_data_dir)?;
+    
+    // 先克隆 config 用于后端注册
+    let config_clone = config.clone();
+    
+    if let Some(hotkey) = config {
+        settings.plugin_hotkeys.insert(plugin_id.clone(), hotkey);
+    } else {
+        settings.plugin_hotkeys.remove(&plugin_id);
+    }
+    
+    settings::save_settings(&app_data_dir, &settings)?;
+    
+    // 更新后端快捷键注册
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(hotkey) = config_clone {
+            // 注册新的快捷键
+            if let Err(e) = crate::hotkey_handler::windows::register_plugin_hotkey(plugin_id.clone(), hotkey) {
+                eprintln!("Failed to register plugin hotkey: {}", e);
+            }
+        } else {
+            // 取消注册
+            if let Err(e) = crate::hotkey_handler::windows::unregister_plugin_hotkey(&plugin_id) {
+                eprintln!("Failed to unregister plugin hotkey: {}", e);
+            }
+        }
+        
+        // 通知前端更新插件快捷键
+        if let Err(e) = app.emit("plugin-hotkeys-updated", settings.plugin_hotkeys.clone()) {
+            eprintln!("Failed to emit plugin-hotkeys-updated event: {}", e);
+        }
+    }
+    
     Ok(())
 }
 

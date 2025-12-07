@@ -1,11 +1,12 @@
 #[cfg(target_os = "windows")]
 pub mod windows {
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, LazyLock};
     use std::thread;
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::path::PathBuf;
+    use std::collections::HashMap;
     use windows_sys::Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
         UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, TranslateMessage, MSG},
@@ -931,12 +932,346 @@ pub mod windows {
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }
+
+    // 通用的快捷键管理器 - 支持多个快捷键
+    pub struct MultiHotkeyManager {
+        hotkeys: Arc<Mutex<HashMap<String, crate::settings::HotkeyConfig>>>,
+        sender: Arc<Mutex<Option<mpsc::Sender<String>>>>,
+        hwnd: Arc<Mutex<Option<HWND>>>,
+        hook: Arc<Mutex<Option<windows_sys::Win32::UI::WindowsAndMessaging::HHOOK>>>,
+        last_triggered: Arc<Mutex<Option<(String, std::time::Instant)>>>, // 防抖：记录上次触发的插件和时间
+    }
+    
+    static MULTI_HOTKEY_MANAGER: LazyLock<Arc<MultiHotkeyManager>> = LazyLock::new(|| {
+        Arc::new(MultiHotkeyManager {
+            hotkeys: Arc::new(Mutex::new(HashMap::new())),
+            sender: Arc::new(Mutex::new(None)),
+            hwnd: Arc::new(Mutex::new(None)),
+            hook: Arc::new(Mutex::new(None)),
+            last_triggered: Arc::new(Mutex::new(None)),
+        })
+    });
+    
+    /// 设置全局 sender（在启动监听器时调用）
+    pub fn set_global_sender(sender: mpsc::Sender<String>) {
+        let manager = MULTI_HOTKEY_MANAGER.clone();
+        let mut sender_guard = manager.sender.lock().unwrap();
+        *sender_guard = Some(sender);
+    }
+    
+    // 全局键盘钩子回调 - 检查所有已注册的快捷键
+    unsafe extern "system" fn global_keyboard_hook_proc(nCode: i32, wParam: WPARAM, lParam: LPARAM) -> LRESULT {
+        use windows_sys::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT;
+        
+        if nCode < 0 {
+            return CallNextHookEx(windows_sys::Win32::UI::WindowsAndMessaging::HHOOK::default(), nCode, wParam, lParam);
+        }
+        
+        // 只处理 WM_KEYDOWN，忽略 WM_SYSKEYDOWN，避免重复触发
+        // WM_SYSKEYDOWN 通常用于系统快捷键（如 Alt+Tab），我们只处理普通按键
+        let is_keydown = wParam == WM_KEYDOWN as WPARAM;
+        if !is_keydown {
+            return CallNextHookEx(windows_sys::Win32::UI::WindowsAndMessaging::HHOOK::default(), nCode, wParam, lParam);
+        }
+        
+        let hook_struct = &*(lParam as *const KBDLLHOOKSTRUCT);
+        let vk_code = hook_struct.vkCode as u32;
+        
+        // 获取当前按下的修饰键（使用 GetAsyncKeyState）
+        let mut modifiers: Vec<String> = Vec::new();
+        unsafe {
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+            // 检查修饰键状态（高位表示当前按下）
+            // 使用 u16 字面量然后转换为 i16 进行位运算
+            const KEY_PRESSED_MASK: i16 = 0x8000u16 as i16;
+            if (GetAsyncKeyState(0xA2) & KEY_PRESSED_MASK) != 0 || (GetAsyncKeyState(0xA3) & KEY_PRESSED_MASK) != 0 { // VK_LCONTROL, VK_RCONTROL
+                modifiers.push("Ctrl".to_string());
+            }
+            if (GetAsyncKeyState(0xA4) & KEY_PRESSED_MASK) != 0 || (GetAsyncKeyState(0xA5) & KEY_PRESSED_MASK) != 0 { // VK_LMENU, VK_RMENU
+                modifiers.push("Alt".to_string());
+            }
+            if (GetAsyncKeyState(0xA0) & KEY_PRESSED_MASK) != 0 || (GetAsyncKeyState(0xA1) & KEY_PRESSED_MASK) != 0 { // VK_LSHIFT, VK_RSHIFT
+                modifiers.push("Shift".to_string());
+            }
+            if (GetAsyncKeyState(0x5B) & KEY_PRESSED_MASK) != 0 || (GetAsyncKeyState(0x5C) & KEY_PRESSED_MASK) != 0 { // VK_LWIN, VK_RWIN
+                modifiers.push("Meta".to_string());
+            }
+        }
+        
+        // 转换虚拟键码为键名
+        let key_name_opt: Option<String> = match vk_code {
+            0x20 => Some("Space".to_string()),
+            0x0D => Some("Enter".to_string()),
+            0x1B => Some("Escape".to_string()),
+            0x09 => Some("Tab".to_string()),
+            0x08 => Some("Backspace".to_string()),
+            0x2E => Some("Delete".to_string()),
+            0x2D => Some("Insert".to_string()),
+            0x24 => Some("Home".to_string()),
+            0x23 => Some("End".to_string()),
+            0x21 => Some("PageUp".to_string()),
+            0x22 => Some("PageDown".to_string()),
+            0x26 => Some("ArrowUp".to_string()),
+            0x28 => Some("ArrowDown".to_string()),
+            0x25 => Some("ArrowLeft".to_string()),
+            0x27 => Some("ArrowRight".to_string()),
+            0x70..=0x7B => {
+                let f_keys = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+                Some(f_keys[(vk_code - 0x70) as usize].to_string())
+            },
+            0x30..=0x39 => {
+                // 数字键 0-9
+                let digit = ((vk_code - 0x30) as u8 + b'0') as char;
+                Some(digit.to_string())
+            },
+            0x41..=0x5A => {
+                // 字母键 A-Z
+                let letter = (vk_code as u8) as char;
+                Some(letter.to_string())
+            },
+            _ => None,
+        };
+        
+        // 如果没有匹配的键名，继续传递消息
+        let key_name = match key_name_opt {
+            Some(name) => name,
+            None => return CallNextHookEx(windows_sys::Win32::UI::WindowsAndMessaging::HHOOK::default(), nCode, wParam, lParam),
+        };
+        
+        // 检查是否匹配任何已注册的快捷键
+        let manager = MULTI_HOTKEY_MANAGER.clone();
+        let hotkeys_guard = manager.hotkeys.lock().unwrap();
+        let sender_guard = manager.sender.lock().unwrap();
+        let mut last_triggered_guard = manager.last_triggered.lock().unwrap();
+        
+        if let Some(ref sender) = *sender_guard {
+            for (id, config) in hotkeys_guard.iter() {
+                // 检查修饰键是否匹配
+                let mut config_modifiers = config.modifiers.clone();
+                config_modifiers.sort();
+                let mut pressed_modifiers = modifiers.clone();
+                pressed_modifiers.sort();
+                
+                if config_modifiers == pressed_modifiers && config.key == key_name {
+                    // 防抖：检查是否在 200ms 内重复触发同一个插件
+                    let now = std::time::Instant::now();
+                    if let Some((last_id, last_time)) = last_triggered_guard.as_ref() {
+                        if last_id == id && now.duration_since(*last_time).as_millis() < 200 {
+                            // 在 200ms 内重复触发，忽略
+                            return CallNextHookEx(windows_sys::Win32::UI::WindowsAndMessaging::HHOOK::default(), nCode, wParam, lParam);
+                        }
+                    }
+                    
+                    // 记录触发时间和插件 ID
+                    *last_triggered_guard = Some((id.clone(), now));
+                    
+                    // 匹配！发送事件
+                    let _ = sender.send(id.clone());
+                    // 不阻止消息传递，让其他程序也能响应
+                    break; // 只触发第一个匹配的快捷键
+                }
+            }
+        }
+        
+        CallNextHookEx(windows_sys::Win32::UI::WindowsAndMessaging::HHOOK::default(), nCode, wParam, lParam)
+    }
+    
+    /// 启动多快捷键监听器（用于插件快捷键）
+    pub fn start_multi_hotkey_listener(
+        sender: mpsc::Sender<String>,
+    ) -> Result<thread::JoinHandle<()>, String> {
+        // 设置全局 sender
+        set_global_sender(sender);
+        
+        let manager = MULTI_HOTKEY_MANAGER.clone();
+        
+        let handle = thread::spawn(move || {
+            unsafe {
+                use std::ffi::OsStr;
+                use std::os::windows::ffi::OsStrExt;
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    CreateWindowExW, RegisterClassW, UnregisterClassW, CW_USEDEFAULT, WNDCLASSW,
+                    WS_OVERLAPPED, GetMessageW, TranslateMessage, DispatchMessageW, MSG,
+                };
+                use windows_sys::Win32::Foundation::HINSTANCE;
+                
+                // 创建窗口类
+                let class_name: Vec<u16> = OsStr::new("ReFastMultiHotkeyWindow")
+                    .encode_wide()
+                    .chain(Some(0))
+                    .collect();
+                
+                let wc = WNDCLASSW {
+                    style: 0,
+                    lpfnWndProc: Some(multi_hotkey_wnd_proc),
+                    cbClsExtra: 0,
+                    cbWndExtra: 0,
+                    hInstance: 0,
+                    hIcon: 0,
+                    hCursor: 0,
+                    hbrBackground: 0,
+                    lpszMenuName: std::ptr::null(),
+                    lpszClassName: class_name.as_ptr(),
+                };
+                
+                let atom = RegisterClassW(&wc);
+                if atom == 0 {
+                    eprintln!("[MultiHotkey] Failed to register window class");
+                    return;
+                }
+                
+                // 创建隐藏窗口
+                let hwnd = CreateWindowExW(
+                    0,
+                    class_name.as_ptr(),
+                    std::ptr::null(),
+                    WS_OVERLAPPED,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    0,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                );
+                
+                if hwnd == 0 {
+                    eprintln!("[MultiHotkey] Failed to create hotkey window");
+                    let _ = UnregisterClassW(class_name.as_ptr(), 0);
+                    return;
+                }
+                
+                // 保存窗口句柄
+                {
+                    let mut hwnd_guard = manager.hwnd.lock().unwrap();
+                    *hwnd_guard = Some(hwnd);
+                }
+                
+                // 安装全局键盘钩子
+                let hook = SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    global_keyboard_hook_proc,
+                    HINSTANCE::default(),
+                    0,
+                );
+                
+                if hook == windows_sys::Win32::UI::WindowsAndMessaging::HHOOK::default() {
+                    eprintln!("[MultiHotkey] Failed to install keyboard hook");
+                    let _ = UnregisterClassW(class_name.as_ptr(), 0);
+                    return;
+                }
+                
+                // 保存钩子句柄
+                {
+                    let mut hook_guard = manager.hook.lock().unwrap();
+                    *hook_guard = Some(hook);
+                }
+                
+                eprintln!("[MultiHotkey] Multi-hotkey listener started");
+                
+                // 消息循环
+                let mut msg = MSG {
+                    hwnd: 0,
+                    message: 0,
+                    wParam: 0,
+                    lParam: 0,
+                    time: 0,
+                    pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+                };
+                
+                loop {
+                    let result = GetMessageW(&mut msg, 0, 0, 0);
+                    
+                    if result == 0 {
+                        break;
+                    }
+                    
+                    if result == -1 {
+                        eprintln!("[MultiHotkey] GetMessage error");
+                        break;
+                    }
+                    
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                
+                // 清理
+                {
+                    let mut hook_guard = manager.hook.lock().unwrap();
+                    if let Some(h) = *hook_guard {
+                        UnhookWindowsHookEx(h);
+                        *hook_guard = None;
+                    }
+                }
+                
+                let _ = UnregisterClassW(class_name.as_ptr(), 0);
+            }
+        });
+        
+        Ok(handle)
+    }
+    
+    /// 注册插件快捷键
+    pub fn register_plugin_hotkey(
+        plugin_id: String,
+        config: crate::settings::HotkeyConfig,
+    ) -> Result<(), String> {
+        let manager = MULTI_HOTKEY_MANAGER.clone();
+        let mut hotkeys_guard = manager.hotkeys.lock().unwrap();
+        hotkeys_guard.insert(plugin_id.clone(), config);
+        eprintln!("[MultiHotkey] Registered hotkey for plugin: {}", plugin_id);
+        Ok(())
+    }
+    
+    /// 取消注册插件快捷键
+    pub fn unregister_plugin_hotkey(plugin_id: &str) -> Result<(), String> {
+        let manager = MULTI_HOTKEY_MANAGER.clone();
+        let mut hotkeys_guard = manager.hotkeys.lock().unwrap();
+        hotkeys_guard.remove(plugin_id);
+        eprintln!("[MultiHotkey] Unregistered hotkey for plugin: {}", plugin_id);
+        Ok(())
+    }
+    
+    /// 更新所有插件快捷键
+    pub fn update_plugin_hotkeys(
+        hotkeys: std::collections::HashMap<String, crate::settings::HotkeyConfig>,
+    ) -> Result<(), String> {
+        let manager = MULTI_HOTKEY_MANAGER.clone();
+        let mut hotkeys_guard = manager.hotkeys.lock().unwrap();
+        hotkeys_guard.clear();
+        
+        for (plugin_id, config) in hotkeys {
+            hotkeys_guard.insert(plugin_id.clone(), config);
+        }
+        
+        eprintln!("[MultiHotkey] Updated {} plugin hotkeys", hotkeys_guard.len());
+        Ok(())
+    }
+    
+    unsafe extern "system" fn multi_hotkey_wnd_proc(
+        _hwnd: HWND,
+        msg: u32,
+        _wparam: WPARAM,
+        _lparam: LPARAM,
+    ) -> LRESULT {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{DefWindowProcW, PostQuitMessage, WM_DESTROY};
+        
+        match msg {
+            WM_DESTROY => {
+                PostQuitMessage(0);
+                0
+            }
+            _ => DefWindowProcW(_hwnd, msg, _wparam, _lparam),
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub mod windows {
     use std::sync::mpsc;
     use std::thread;
+    use std::collections::HashMap;
 
     pub fn start_hotkey_listener(
         _sender: mpsc::Sender<()>,
@@ -947,5 +1282,32 @@ pub mod windows {
 
     pub fn update_hotkey(_config: crate::settings::HotkeyConfig) -> Result<(), String> {
         Err("Hotkey listener is only supported on Windows".to_string())
+    }
+    
+    pub fn start_multi_hotkey_listener(
+        _sender: mpsc::Sender<String>,
+    ) -> Result<thread::JoinHandle<()>, String> {
+        Err("Multi-hotkey listener is only supported on Windows".to_string())
+    }
+    
+    pub fn set_global_sender(_sender: mpsc::Sender<String>) {
+        // No-op on non-Windows
+    }
+    
+    pub fn register_plugin_hotkey(
+        _plugin_id: String,
+        _config: crate::settings::HotkeyConfig,
+    ) -> Result<(), String> {
+        Err("Plugin hotkey registration is only supported on Windows".to_string())
+    }
+    
+    pub fn unregister_plugin_hotkey(_plugin_id: &str) -> Result<(), String> {
+        Err("Plugin hotkey unregistration is only supported on Windows".to_string())
+    }
+    
+    pub fn update_plugin_hotkeys(
+        _hotkeys: HashMap<String, crate::settings::HotkeyConfig>,
+    ) -> Result<(), String> {
+        Err("Plugin hotkeys update is only supported on Windows".to_string())
     }
 }

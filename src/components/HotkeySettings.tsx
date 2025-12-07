@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { tauriApi } from "../api/tauri";
+import { plugins, pluginRegistry } from "../plugins";
 
 interface HotkeySettingsProps {
   onClose: () => void;
@@ -22,8 +23,24 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
   const isCompletingRef = useRef(false); // 标记是否正在完成录制，防止重复处理
   const finalKeysRef = useRef<string[] | null>(null); // 存储最终应该显示的按键，一旦设置就不再更新
 
+  // 插件快捷键相关状态
+  const [pluginHotkeys, setPluginHotkeys] = useState<Record<string, HotkeyConfig>>({});
+  const [recordingPluginId, setRecordingPluginId] = useState<string | null>(null);
+  const [pluginRecordingKeys, setPluginRecordingKeys] = useState<string[]>([]);
+  const pluginRecordingRef = useRef(false);
+  const pluginLastModifierRef = useRef<string | null>(null);
+  const pluginLastModifierTimeRef = useRef<number>(0);
+  const pluginIsCompletingRef = useRef(false);
+  const pluginFinalKeysRef = useRef<string[] | null>(null);
+  const [allPlugins, setAllPlugins] = useState<typeof plugins>([]);
+
   useEffect(() => {
     loadHotkey();
+    loadPluginHotkeys();
+    // 确保插件已初始化
+    pluginRegistry.initialize().then(() => {
+      setAllPlugins(pluginRegistry.getAllPlugins());
+    });
   }, []);
 
   // 打印当前快捷键（用于调试）
@@ -45,6 +62,43 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
       }
     } catch (error) {
       console.error("Failed to load hotkey config:", error);
+    }
+  };
+
+  const loadPluginHotkeys = async () => {
+    try {
+      const configs = await tauriApi.getPluginHotkeys();
+      setPluginHotkeys(configs);
+    } catch (error) {
+      console.error("Failed to load plugin hotkeys:", error);
+    }
+  };
+
+  const savePluginHotkey = async (pluginId: string, config: HotkeyConfig | null) => {
+    try {
+      console.log(`[PluginHotkeys] Saving hotkey for plugin ${pluginId}:`, config);
+      await tauriApi.savePluginHotkey(pluginId, config);
+      if (config) {
+        setPluginHotkeys((prev) => {
+          const updated = { ...prev, [pluginId]: config };
+          console.log(`[PluginHotkeys] ✅ Updated local state:`, updated);
+          return updated;
+        });
+      } else {
+        setPluginHotkeys((prev) => {
+          const newHotkeys = { ...prev };
+          delete newHotkeys[pluginId];
+          console.log(`[PluginHotkeys] ✅ Removed hotkey for plugin ${pluginId}`);
+          return newHotkeys;
+        });
+      }
+      setSaveMessage("插件快捷键已保存并生效");
+      setTimeout(() => setSaveMessage(null), 2000);
+    } catch (error) {
+      console.error("[PluginHotkeys] ❌ Failed to save plugin hotkey:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setSaveMessage(errorMessage || "保存失败");
+      setTimeout(() => setSaveMessage(null), 5000);
     }
   };
 
@@ -238,18 +292,153 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
     };
   }, [isRecording]);
 
+  // 插件快捷键录制逻辑
+  useEffect(() => {
+    if (!recordingPluginId) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!pluginRecordingRef.current || pluginIsCompletingRef.current || e.repeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (pluginFinalKeysRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      const keyMap: Record<string, string> = {
+        "Control": "Ctrl",
+        "Alt": "Alt",
+        "Shift": "Shift",
+        "Meta": "Meta",
+      };
+
+      let key = e.key;
+
+      if (keyMap[key]) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        const mappedKey = keyMap[key];
+        const now = Date.now();
+
+        const isSameModifier = pluginLastModifierRef.current === mappedKey;
+        const hasPreviousPress = pluginLastModifierTimeRef.current > 0;
+        const timeSinceLastPress = hasPreviousPress ? now - pluginLastModifierTimeRef.current : Infinity;
+        const isDoubleTapTime = timeSinceLastPress < 500;
+
+        if (isSameModifier && hasPreviousPress && isDoubleTapTime) {
+          pluginIsCompletingRef.current = true;
+          pluginRecordingRef.current = false;
+
+          const finalModifiers: string[] = [mappedKey, mappedKey];
+          pluginFinalKeysRef.current = finalModifiers;
+
+          const newHotkey: HotkeyConfig = {
+            modifiers: finalModifiers,
+            key: mappedKey,
+          };
+
+          pluginLastModifierRef.current = null;
+          pluginLastModifierTimeRef.current = 0;
+
+          setPluginRecordingKeys(finalModifiers);
+          savePluginHotkey(recordingPluginId, newHotkey);
+          setRecordingPluginId(null);
+
+          window.removeEventListener("keydown", handleKeyDown, true);
+          window.removeEventListener("keyup", handleKeyUp, true);
+
+          setTimeout(() => {
+            pluginIsCompletingRef.current = false;
+          }, 300);
+
+          return;
+        }
+
+        if (pluginFinalKeysRef.current) {
+          return;
+        }
+
+        if (!hasPreviousPress || !isSameModifier || timeSinceLastPress >= 500) {
+          pluginLastModifierRef.current = mappedKey;
+          pluginLastModifierTimeRef.current = now;
+          setPluginRecordingKeys([mappedKey]);
+        }
+
+        return;
+      }
+
+      pluginLastModifierRef.current = null;
+      pluginLastModifierTimeRef.current = 0;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const modifiers: string[] = [];
+      if (e.ctrlKey) modifiers.push("Ctrl");
+      if (e.altKey) modifiers.push("Alt");
+      if (e.shiftKey) modifiers.push("Shift");
+      if (e.metaKey) modifiers.push("Meta");
+
+      if (key === " ") key = "Space";
+      if (key.length === 1) key = key.toUpperCase();
+
+      if (modifiers.length === 0) {
+        setPluginRecordingKeys([key]);
+        return;
+      }
+
+      const newHotkey: HotkeyConfig = {
+        modifiers: modifiers,
+        key: key,
+      };
+
+      setPluginRecordingKeys([...modifiers, key]);
+      savePluginHotkey(recordingPluginId, newHotkey);
+      setRecordingPluginId(null);
+      pluginRecordingRef.current = false;
+    };
+
+    const handleKeyUp = () => {
+      if (!pluginRecordingRef.current) return;
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+    };
+  }, [recordingPluginId]);
+
   // ESC 键处理
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isRecording) {
+      if (e.key === "Escape" && !isRecording && !recordingPluginId) {
         onClose();
       } else if (e.key === "Escape" && isRecording) {
         stopRecording();
+      } else if (e.key === "Escape" && recordingPluginId) {
+        setRecordingPluginId(null);
+        pluginRecordingRef.current = false;
+        setPluginRecordingKeys([]);
+        pluginLastModifierRef.current = null;
+        pluginLastModifierTimeRef.current = 0;
+        pluginIsCompletingRef.current = false;
+        pluginFinalKeysRef.current = null;
       }
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [isRecording, onClose]);
+  }, [isRecording, recordingPluginId, onClose]);
 
   const handleSave = async () => {
     try {
@@ -375,6 +564,96 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
               <li>建议使用 Alt 或 Ctrl 作为修饰键，避免与其他应用冲突</li>
               <li>保存后需要重启应用才能生效</li>
             </ul>
+          </div>
+
+          {/* 插件快捷键配置 */}
+          <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+            <h4 className="text-sm font-medium text-gray-700 mb-4">插件快捷键</h4>
+            <p className="text-xs text-gray-500 mb-4">
+              为插件配置快捷键，按下快捷键即可快速打开对应插件
+            </p>
+            
+            <div className="space-y-3">
+              {allPlugins.map((plugin) => {
+                const pluginHotkey = pluginHotkeys[plugin.id];
+                const isRecordingThis = recordingPluginId === plugin.id;
+                
+                return (
+                  <div
+                    key={plugin.id}
+                    className="bg-white rounded-md p-4 border border-gray-200"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-800">{plugin.name}</div>
+                        {plugin.description && (
+                          <div className="text-xs text-gray-500 mt-1">{plugin.description}</div>
+                        )}
+                        {pluginHotkey ? (
+                          <div className="text-sm font-mono text-gray-600 mt-2">
+                            {formatHotkey(pluginHotkey)}
+                          </div>
+                        ) : (
+                          <div className="text-sm text-gray-400 mt-2">未设置</div>
+                        )}
+                      </div>
+                      <div className="flex gap-2 ml-4">
+                        {!isRecordingThis ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                setRecordingPluginId(plugin.id);
+                                pluginRecordingRef.current = true;
+                                setPluginRecordingKeys([]);
+                                pluginFinalKeysRef.current = null;
+                              }}
+                              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                            >
+                              {pluginHotkey ? "修改" : "设置"}
+                            </button>
+                            {pluginHotkey && (
+                              <button
+                                onClick={() => savePluginHotkey(plugin.id, null)}
+                                className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+                              >
+                                清除
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setRecordingPluginId(null);
+                              pluginRecordingRef.current = false;
+                              setPluginRecordingKeys([]);
+                              pluginLastModifierRef.current = null;
+                              pluginLastModifierTimeRef.current = 0;
+                              pluginIsCompletingRef.current = false;
+                              pluginFinalKeysRef.current = null;
+                            }}
+                            className="px-3 py-1.5 text-sm bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+                          >
+                            取消
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {isRecordingThis && (
+                      <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-md">
+                        <p className="text-xs text-yellow-800">
+                          正在录制... 请按下您想要设置的快捷键组合
+                        </p>
+                        {pluginRecordingKeys.length > 0 && (
+                          <p className="text-xs text-yellow-600 mt-1">
+                            已按下: {pluginRecordingKeys.join(" + ")}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>

@@ -1,6 +1,7 @@
 use crate::db;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +12,10 @@ pub struct Settings {
     pub startup_enabled: bool,
     #[serde(default)]
     pub hotkey: Option<HotkeyConfig>,
+    #[serde(default)]
+    pub plugin_hotkeys: HashMap<String, HotkeyConfig>,
+    #[serde(default)]
+    pub app_hotkeys: HashMap<String, HotkeyConfig>,
     #[serde(default = "default_close_on_blur")]
     pub close_on_blur: bool,
     #[serde(default = "default_result_style")]
@@ -31,6 +36,7 @@ impl Default for Settings {
             ollama: OllamaSettings::default(),
             startup_enabled: false,
             hotkey: None,
+            plugin_hotkeys: HashMap::new(),
             close_on_blur: default_close_on_blur(),
             result_style: default_result_style(),
         }
