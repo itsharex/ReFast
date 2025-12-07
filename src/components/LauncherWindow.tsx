@@ -3841,7 +3841,7 @@ export function LauncherWindow() {
                                 className={`flex flex-col items-center justify-center gap-1.5 p-2 rounded-lg cursor-pointer transition-all ${
                                   isSelected 
                                     ? theme.card(true) 
-                                    : 'hover:bg-gray-100 bg-gray-50'
+                                    : ''
                                 }`}
                                 style={{
                                   animation: `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
