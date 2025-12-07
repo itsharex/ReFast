@@ -50,7 +50,7 @@ export function getThemeConfig(style: ResultStyle): ThemeConfig {
       }`,
     iconWrap: (selected: boolean) =>
       `w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden transition-colors duration-150 ${
-        selected ? "bg-indigo-100 border border-indigo-200" : "bg-gray-50 border border-gray-100 group-hover:border-gray-200"
+        selected ? "" : ""
       }`,
     iconColor: (selected: boolean, defaultColor: string) => (selected ? "text-indigo-600" : defaultColor),
     title: (selected: boolean) => (selected ? "text-indigo-900" : "text-gray-900"),
@@ -83,10 +83,8 @@ export function getThemeConfig(style: ResultStyle): ThemeConfig {
           : "bg-gradient-to-b from-[#f1f6fc] to-[#e2eaf6] text-[#2e3f5f]"
       }`,
     iconWrap: (selected: boolean) =>
-      `w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden transition-all duration-200 border ${
-        selected
-          ? "bg-gradient-to-b from-[#edf3fb] to-[#d9e4f5] border-[#c6d4e8] shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_3px_10px_rgba(20,32,50,0.16)]"
-          : "bg-gradient-to-b from-[#fafcfe] to-[#ecf1f8] border-[#e0e7f1] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_2px_7px_rgba(20,32,50,0.12)]"
+      `w-9 h-9 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden transition-all duration-200 ${
+        selected ? "" : ""
       }`,
     iconColor: (selected: boolean, defaultColor: string) => (selected ? "text-[#2f4670]" : defaultColor),
     title: (selected: boolean) => (selected ? "text-[#1f2a44]" : "text-[#222b3a]"),
@@ -117,10 +115,8 @@ export function getThemeConfig(style: ResultStyle): ThemeConfig {
         selected ? "bg-white/20 text-white backdrop-blur-sm" : "bg-gray-100 text-gray-500 group-hover:bg-gray-200"
       }`,
     iconWrap: (selected: boolean) =>
-      `w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden transition-all duration-200 shadow-sm ${
-        selected
-          ? "bg-white/20 backdrop-blur-sm ring-2 ring-white/30"
-          : "bg-gradient-to-br from-gray-50 to-gray-100 group-hover:from-gray-100 group-hover:to-gray-200"
+      `w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden transition-all duration-200 ${
+        selected ? "" : ""
       }`,
     iconColor: (selected: boolean, defaultColor: string) => (selected ? "text-white" : defaultColor),
     title: (selected: boolean) => (selected ? "text-white" : "text-gray-900"),
