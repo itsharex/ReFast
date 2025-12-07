@@ -283,6 +283,15 @@ export function AboutSettingsPage({}: AboutSettingsProps) {
     }
   };
 
+  const handleContactAuthor = async () => {
+    try {
+      await tauriApi.openUrl("https://github.com/Xieweikang123/ReFast?tab=readme-ov-file#%E4%BD%9C%E8%80%85%E5%BE%AE%E4%BF%A1");
+    } catch (error) {
+      console.error("Failed to open contact page:", error);
+      alert("打开联系页面失败");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -309,19 +318,33 @@ export function AboutSettingsPage({}: AboutSettingsProps) {
                 </p>
               </div>
 
-              <div className="flex gap-3">
-                <button
-                  onClick={handleOpenGitHub}
-                  className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-sm"
-                >
-                  GitHub 主页
-                </button>
-                <button
-                  onClick={handleOpenReleases}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
-                >
-                  检查更新
-                </button>
+              <div className="space-y-3">
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleOpenGitHub}
+                    className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-sm"
+                  >
+                    GitHub 主页
+                  </button>
+                  <button
+                    onClick={handleOpenReleases}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+                  >
+                    检查更新
+                  </button>
+                  <button
+                    onClick={handleContactAuthor}
+                    className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm"
+                  >
+                    加入产品交流群
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500">
+                  点击"加入产品交流群"可查看作者微信，加入产品交流群获取最新动态和反馈建议
+                </p>
+                <p className="text-xs text-gray-400">
+                  如果打不开 GitHub，请加微信：<span className="font-mono text-gray-600">570312124</span>
+                </p>
               </div>
             </div>
           </div>
