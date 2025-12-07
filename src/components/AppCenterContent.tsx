@@ -113,6 +113,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const [deleteBackupConfirmPath, setDeleteBackupConfirmPath] = useState<string | null>(null);
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [pendingDeleteCount, setPendingDeleteCount] = useState(0);
+  const [debuggingAppName, setDebuggingAppName] = useState<string | null>(null);
   
   // 设置相关状态
   const [activeSettingsPage, setActiveSettingsPage] = useState<SettingsPage>("system");
@@ -577,17 +578,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
         const data = await tauriApi.scanApplications();
         setAppIndexList(data);
         setAppIndexLoading(false);
-
-        // Best-effort icon population for the loaded apps (run asynchronously to avoid blocking UI)
-        (async () => {
-          try {
-            const iconLimit = 80;
-            const withIcons = await tauriApi.populateAppIcons(iconLimit);
-            setAppIndexList(withIcons);
-          } catch (iconError) {
-            console.warn("应用索引图标补全失败:", iconError);
-          }
-        })();
+        // 不再自动提取图标，避免打开列表时的延迟
       }
     } catch (error: any) {
       console.error("获取应用索引列表失败:", error);
@@ -609,7 +600,13 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   };
 
   const handleDebugAppIcon = async (appName: string) => {
+    // 防止重复点击
+    if (debuggingAppName) {
+      return;
+    }
+    
     try {
+      setDebuggingAppName(appName);
       const result = await tauriApi.debugAppIcon(appName);
       // 显示调试结果（可以使用 alert 或者更好的 UI）
       console.log('=== 图标调试结果 ===');
@@ -618,6 +615,8 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     } catch (error: any) {
       console.error('调试失败:', error);
       alert(`调试失败: ${error?.message || error}`);
+    } finally {
+      setDebuggingAppName(null);
     }
   };
 
@@ -856,17 +855,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
         setAppIndexLoading(false);
         setAppIndexError(null);
         setAppIndexProgress(null);
-
-        // Best-effort icon population for the loaded apps (run asynchronously to avoid blocking UI)
-        (async () => {
-          try {
-            const iconLimit = 50;
-            const withIcons = await tauriApi.populateAppIcons(iconLimit);
-            setAppIndexList(withIcons);
-          } catch (iconError) {
-            console.warn("应用索引图标补全失败:", iconError);
-          }
-        })();
+        // 不再自动提取图标，避免扫描完成后的延迟
       });
 
       // 监听扫描错误事件
@@ -1983,10 +1972,11 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                             e.stopPropagation();
                             handleDebugAppIcon(item.name);
                           }}
-                          className="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition"
+                          disabled={debuggingAppName !== null}
+                          className="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
                           title="调试图标提取"
                         >
-                          调试图标
+                          {debuggingAppName === item.name ? "调试中..." : "调试图标"}
                         </button>
                       )}
                     </div>
