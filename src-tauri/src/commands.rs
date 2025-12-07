@@ -3546,6 +3546,106 @@ pub fn save_plugin_hotkey(
 }
 
 #[tauri::command]
+pub fn get_app_hotkeys(app: tauri::AppHandle) -> Result<std::collections::HashMap<String, settings::HotkeyConfig>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let settings = settings::load_settings(&app_data_dir)?;
+    Ok(settings.app_hotkeys)
+}
+
+#[tauri::command]
+pub fn save_app_hotkey(
+    app: tauri::AppHandle,
+    app_path: String,
+    config: Option<settings::HotkeyConfig>,
+) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let mut settings = settings::load_settings(&app_data_dir)?;
+    
+    // 先克隆 config 用于后端注册
+    let config_clone = config.clone();
+    
+    if let Some(hotkey) = config {
+        settings.app_hotkeys.insert(app_path.clone(), hotkey);
+    } else {
+        settings.app_hotkeys.remove(&app_path);
+    }
+    
+    settings::save_settings(&app_data_dir, &settings)?;
+    
+    // 更新后端快捷键注册
+    #[cfg(target_os = "windows")]
+    {
+        // 使用 "app:" 前缀来区分应用快捷键
+        let hotkey_id = format!("app:{}", app_path);
+        if let Some(hotkey) = config_clone {
+            // 注册新的快捷键
+            if let Err(e) = crate::hotkey_handler::windows::register_plugin_hotkey(hotkey_id.clone(), hotkey) {
+                eprintln!("Failed to register app hotkey: {}", e);
+            }
+        } else {
+            // 取消注册
+            if let Err(e) = crate::hotkey_handler::windows::unregister_plugin_hotkey(&hotkey_id) {
+                eprintln!("Failed to unregister app hotkey: {}", e);
+            }
+        }
+        
+        // 通知前端更新应用快捷键
+        if let Err(e) = app.emit("app-hotkeys-updated", settings.app_hotkeys.clone()) {
+            eprintln!("Failed to emit app-hotkeys-updated event: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_app_center_hotkey(app: tauri::AppHandle) -> Result<Option<settings::HotkeyConfig>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let settings = settings::load_settings(&app_data_dir)?;
+    Ok(settings.app_center_hotkey)
+}
+
+#[tauri::command]
+pub fn save_app_center_hotkey(
+    app: tauri::AppHandle,
+    config: Option<settings::HotkeyConfig>,
+) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    let mut settings = settings::load_settings(&app_data_dir)?;
+    
+    // 先克隆 config 用于后端注册
+    let config_clone = config.clone();
+    
+    settings.app_center_hotkey = config.clone();
+    settings::save_settings(&app_data_dir, &settings)?;
+    
+    // 更新后端快捷键注册
+    #[cfg(target_os = "windows")]
+    {
+        // 使用 "app_center" 作为快捷键ID
+        let hotkey_id = "app_center".to_string();
+        if let Some(hotkey) = config_clone {
+            // 注册新的快捷键
+            if let Err(e) = crate::hotkey_handler::windows::register_plugin_hotkey(hotkey_id.clone(), hotkey) {
+                eprintln!("Failed to register app center hotkey: {}", e);
+            }
+        } else {
+            // 取消注册
+            if let Err(e) = crate::hotkey_handler::windows::unregister_plugin_hotkey(&hotkey_id) {
+                eprintln!("Failed to unregister app center hotkey: {}", e);
+            }
+        }
+        
+        // 通知前端更新应用中心快捷键
+        if let Err(e) = app.emit("app-center-hotkey-updated", config) {
+            eprintln!("Failed to emit app-center-hotkey-updated event: {}", e);
+        }
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
     // 清理锁文件，以便重启后新实例可以正常启动
     use std::fs;

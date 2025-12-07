@@ -437,6 +437,24 @@ export const tauriApi = {
     return invoke("save_plugin_hotkey", { pluginId, config });
   },
 
+  // App hotkey APIs
+  async getAppHotkeys(): Promise<Record<string, { modifiers: string[]; key: string }>> {
+    return invoke("get_app_hotkeys");
+  },
+
+  async saveAppHotkey(appPath: string, config: { modifiers: string[]; key: string } | null): Promise<void> {
+    return invoke("save_app_hotkey", { appPath, config });
+  },
+
+  // App center hotkey APIs
+  async getAppCenterHotkey(): Promise<{ modifiers: string[]; key: string } | null> {
+    return invoke("get_app_center_hotkey");
+  },
+
+  async saveAppCenterHotkey(config: { modifiers: string[]; key: string } | null): Promise<void> {
+    return invoke("save_app_center_hotkey", { config });
+  },
+
   // App version API
   async getAppVersion(): Promise<string> {
     return invoke("get_app_version");

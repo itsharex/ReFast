@@ -34,9 +34,20 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
   const pluginFinalKeysRef = useRef<string[] | null>(null);
   const [allPlugins, setAllPlugins] = useState<typeof plugins>([]);
 
+  // 应用中心快捷键相关状态
+  const [appCenterHotkey, setAppCenterHotkey] = useState<HotkeyConfig | null>(null);
+  const [recordingAppCenter, setRecordingAppCenter] = useState(false);
+  const [appCenterRecordingKeys, setAppCenterRecordingKeys] = useState<string[]>([]);
+  const appCenterRecordingRef = useRef(false);
+  const appCenterLastModifierRef = useRef<string | null>(null);
+  const appCenterLastModifierTimeRef = useRef<number>(0);
+  const appCenterIsCompletingRef = useRef(false);
+  const appCenterFinalKeysRef = useRef<string[] | null>(null);
+
   useEffect(() => {
     loadHotkey();
     loadPluginHotkeys();
+    loadAppCenterHotkey();
     // 确保插件已初始化
     pluginRegistry.initialize().then(() => {
       setAllPlugins(pluginRegistry.getAllPlugins());
@@ -71,6 +82,29 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
       setPluginHotkeys(configs);
     } catch (error) {
       console.error("Failed to load plugin hotkeys:", error);
+    }
+  };
+
+  const loadAppCenterHotkey = async () => {
+    try {
+      const config = await tauriApi.getAppCenterHotkey();
+      setAppCenterHotkey(config);
+    } catch (error) {
+      console.error("Failed to load app center hotkey:", error);
+    }
+  };
+
+  const saveAppCenterHotkey = async (config: HotkeyConfig | null) => {
+    try {
+      await tauriApi.saveAppCenterHotkey(config);
+      setAppCenterHotkey(config);
+      setSaveMessage("应用中心快捷键已保存并生效");
+      setTimeout(() => setSaveMessage(null), 2000);
+    } catch (error) {
+      console.error("Failed to save app center hotkey:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setSaveMessage(errorMessage || "保存失败");
+      setTimeout(() => setSaveMessage(null), 5000);
     }
   };
 
@@ -419,10 +453,137 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
     };
   }, [recordingPluginId]);
 
+  // 应用中心快捷键录制逻辑
+  useEffect(() => {
+    if (!recordingAppCenter) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!appCenterRecordingRef.current || appCenterIsCompletingRef.current || e.repeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (appCenterFinalKeysRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      const keyMap: Record<string, string> = {
+        "Control": "Ctrl",
+        "Alt": "Alt",
+        "Shift": "Shift",
+        "Meta": "Meta",
+      };
+
+      let key = e.key;
+
+      if (keyMap[key]) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        const mappedKey = keyMap[key];
+        const now = Date.now();
+
+        const isSameModifier = appCenterLastModifierRef.current === mappedKey;
+        const hasPreviousPress = appCenterLastModifierTimeRef.current > 0;
+        const timeSinceLastPress = hasPreviousPress ? now - appCenterLastModifierTimeRef.current : Infinity;
+        const isDoubleTapTime = timeSinceLastPress < 500;
+
+        if (isSameModifier && hasPreviousPress && isDoubleTapTime) {
+          appCenterIsCompletingRef.current = true;
+          appCenterRecordingRef.current = false;
+
+          const finalModifiers: string[] = [mappedKey, mappedKey];
+          appCenterFinalKeysRef.current = finalModifiers;
+
+          const newHotkey: HotkeyConfig = {
+            modifiers: finalModifiers,
+            key: mappedKey,
+          };
+
+          appCenterLastModifierRef.current = null;
+          appCenterLastModifierTimeRef.current = 0;
+
+          setAppCenterRecordingKeys(finalModifiers);
+          saveAppCenterHotkey(newHotkey);
+          setRecordingAppCenter(false);
+
+          window.removeEventListener("keydown", handleKeyDown, true);
+          window.removeEventListener("keyup", handleKeyUp, true);
+
+          setTimeout(() => {
+            appCenterIsCompletingRef.current = false;
+          }, 300);
+
+          return;
+        }
+
+        if (appCenterFinalKeysRef.current) {
+          return;
+        }
+
+        if (!hasPreviousPress || !isSameModifier || timeSinceLastPress >= 500) {
+          appCenterLastModifierRef.current = mappedKey;
+          appCenterLastModifierTimeRef.current = now;
+          setAppCenterRecordingKeys([mappedKey]);
+        }
+
+        return;
+      }
+
+      appCenterLastModifierRef.current = null;
+      appCenterLastModifierTimeRef.current = 0;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const modifiers: string[] = [];
+      if (e.ctrlKey) modifiers.push("Ctrl");
+      if (e.altKey) modifiers.push("Alt");
+      if (e.shiftKey) modifiers.push("Shift");
+      if (e.metaKey) modifiers.push("Meta");
+
+      if (key === " ") key = "Space";
+      if (key.length === 1) key = key.toUpperCase();
+
+      if (modifiers.length === 0) {
+        setAppCenterRecordingKeys([key]);
+        return;
+      }
+
+      const newHotkey: HotkeyConfig = {
+        modifiers: modifiers,
+        key: key,
+      };
+
+      setAppCenterRecordingKeys([...modifiers, key]);
+      saveAppCenterHotkey(newHotkey);
+      setRecordingAppCenter(false);
+      appCenterRecordingRef.current = false;
+    };
+
+    const handleKeyUp = () => {
+      if (!appCenterRecordingRef.current) return;
+    };
+
+      window.addEventListener("keydown", handleKeyDown, true);
+      window.addEventListener("keyup", handleKeyUp, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+    };
+  }, [recordingAppCenter, saveAppCenterHotkey]);
+
   // ESC 键处理
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isRecording && !recordingPluginId) {
+      if (e.key === "Escape" && !isRecording && !recordingPluginId && !recordingAppCenter) {
         onClose();
       } else if (e.key === "Escape" && isRecording) {
         stopRecording();
@@ -434,11 +595,19 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
         pluginLastModifierTimeRef.current = 0;
         pluginIsCompletingRef.current = false;
         pluginFinalKeysRef.current = null;
+      } else if (e.key === "Escape" && recordingAppCenter) {
+        setRecordingAppCenter(false);
+        appCenterRecordingRef.current = false;
+        setAppCenterRecordingKeys([]);
+        appCenterLastModifierRef.current = null;
+        appCenterLastModifierTimeRef.current = 0;
+        appCenterIsCompletingRef.current = false;
+        appCenterFinalKeysRef.current = null;
       }
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [isRecording, recordingPluginId, onClose]);
+  }, [isRecording, recordingPluginId, recordingAppCenter, onClose]);
 
   const handleSave = async () => {
     try {
@@ -564,6 +733,79 @@ export function HotkeySettings({ onClose }: HotkeySettingsProps) {
               <li>建议使用 Alt 或 Ctrl 作为修饰键，避免与其他应用冲突</li>
               <li>保存后需要重启应用才能生效</li>
             </ul>
+          </div>
+
+          {/* 应用中心快捷键配置 */}
+          <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
+            <h4 className="text-sm font-medium text-gray-700 mb-2">应用中心快捷键</h4>
+            <p className="text-xs text-gray-500 mb-4">
+              设置快捷键以快速打开应用中心窗口
+            </p>
+            
+            {recordingAppCenter && (
+              <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                <p className="text-sm text-yellow-800">
+                  正在录制... 请按下您想要设置的快捷键组合
+                </p>
+                {appCenterRecordingKeys.length > 0 && (
+                  <p className="text-xs text-yellow-600 mt-1">
+                    已按下: {appCenterRecordingKeys.join(" + ")}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                {appCenterHotkey ? (
+                  <div className="text-sm font-mono text-gray-600">
+                    {formatHotkey(appCenterHotkey)}
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-400">未设置</div>
+                )}
+              </div>
+              <div className="flex gap-2 ml-4">
+                {!recordingAppCenter ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        setRecordingAppCenter(true);
+                        appCenterRecordingRef.current = true;
+                        setAppCenterRecordingKeys([]);
+                        appCenterFinalKeysRef.current = null;
+                      }}
+                      className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                    >
+                      {appCenterHotkey ? "修改" : "设置"}
+                    </button>
+                    {appCenterHotkey && (
+                      <button
+                        onClick={() => saveAppCenterHotkey(null)}
+                        className="px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+                      >
+                        清除
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setRecordingAppCenter(false);
+                      appCenterRecordingRef.current = false;
+                      setAppCenterRecordingKeys([]);
+                      appCenterLastModifierRef.current = null;
+                      appCenterLastModifierTimeRef.current = 0;
+                      appCenterIsCompletingRef.current = false;
+                      appCenterFinalKeysRef.current = null;
+                    }}
+                    className="px-3 py-1.5 text-sm bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors"
+                  >
+                    取消
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* 插件快捷键配置 */}

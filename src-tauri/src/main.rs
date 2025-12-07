@@ -434,28 +434,78 @@ fn main() {
                 // 启动多快捷键监听器
                 match hotkey_handler::windows::start_multi_hotkey_listener(tx_plugin) {
                     Ok(_handle) => {
-                        // 在后台线程中监听插件快捷键事件
+                        // 在后台线程中监听插件和应用快捷键事件
+                        let app_data_dir_hotkey = app_data_dir.clone();
                         std::thread::spawn(move || {
-                            while let Ok(plugin_id) = rx_plugin.recv() {
-                                // 发送事件到前端
-                                if let Err(e) = app_handle_plugin.emit("plugin-hotkey-triggered", plugin_id) {
-                                    eprintln!("[Main] Failed to emit plugin-hotkey-triggered event: {}", e);
+                            while let Ok(hotkey_id) = rx_plugin.recv() {
+                                // 检查是否是应用中心快捷键
+                                if hotkey_id == "app_center" {
+                                    // 打开应用中心窗口
+                                    use crate::commands;
+                                    let app_handle_center = app_handle_plugin.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        if let Err(e) = commands::show_plugin_list_window(app_handle_center).await {
+                                            eprintln!("[Main] Failed to show app center via hotkey: {}", e);
+                                        }
+                                    });
+                                } else if hotkey_id.starts_with("app:") {
+                                    // 提取应用路径
+                                    let app_path = hotkey_id.strip_prefix("app:").unwrap_or(&hotkey_id);
+                                    // 启动应用
+                                    use crate::app_search;
+                                    if let Ok(apps) = app_search::windows::load_cache(&app_data_dir_hotkey) {
+                                        if let Some(app) = apps.iter().find(|a| a.path == app_path) {
+                                            if let Err(e) = app_search::windows::launch_app(app) {
+                                                eprintln!("[Main] Failed to launch app via hotkey: {}", e);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // 插件快捷键，发送事件到前端
+                                    if let Err(e) = app_handle_plugin.emit("plugin-hotkey-triggered", hotkey_id) {
+                                        eprintln!("[Main] Failed to emit plugin-hotkey-triggered event: {}", e);
+                                    }
                                 }
                             }
                         });
                         
-                        // 加载并注册所有插件快捷键
+                        // 加载并注册所有插件和应用快捷键
                         let app_data_dir_plugin = app_data_dir.clone();
                         std::thread::spawn(move || {
                             std::thread::sleep(std::time::Duration::from_millis(500)); // 等待监听器完全启动
                             if let Ok(settings) = settings::load_settings(&app_data_dir_plugin) {
+                                // 注册插件快捷键
                                 let plugin_hotkeys = settings.plugin_hotkeys.clone();
-                                let hotkey_count = plugin_hotkeys.len();
+                                let plugin_hotkey_count = plugin_hotkeys.len();
                                 if !plugin_hotkeys.is_empty() {
                                     if let Err(e) = hotkey_handler::windows::update_plugin_hotkeys(plugin_hotkeys) {
                                         eprintln!("[Main] Failed to register plugin hotkeys: {}", e);
                                     } else {
-                                        eprintln!("[Main] Registered {} plugin hotkeys", hotkey_count);
+                                        eprintln!("[Main] Registered {} plugin hotkeys", plugin_hotkey_count);
+                                    }
+                                }
+                                
+                                // 注册应用中心快捷键
+                                if let Some(ref app_center_hotkey) = settings.app_center_hotkey {
+                                    if let Err(e) = hotkey_handler::windows::register_plugin_hotkey("app_center".to_string(), app_center_hotkey.clone()) {
+                                        eprintln!("[Main] Failed to register app center hotkey: {}", e);
+                                    } else {
+                                        eprintln!("[Main] Registered app center hotkey");
+                                    }
+                                }
+                                
+                                // 注册应用快捷键（使用 "app:" 前缀）
+                                let mut all_hotkeys = std::collections::HashMap::new();
+                                for (app_path, hotkey) in settings.app_hotkeys.iter() {
+                                    let hotkey_id = format!("app:{}", app_path);
+                                    all_hotkeys.insert(hotkey_id, hotkey.clone());
+                                }
+                                let app_hotkey_count = all_hotkeys.len();
+                                if !all_hotkeys.is_empty() {
+                                    if let Err(e) = hotkey_handler::windows::update_plugin_hotkeys(all_hotkeys) {
+                                        eprintln!("[Main] Failed to register app hotkeys: {}", e);
+                                    } else {
+                                        eprintln!("[Main] Registered {} app hotkeys", app_hotkey_count);
                                     }
                                 }
                             }
@@ -613,6 +663,10 @@ fn main() {
             get_plugin_hotkeys,
             save_plugin_hotkeys,
             save_plugin_hotkey,
+            get_app_hotkeys,
+            save_app_hotkey,
+            get_app_center_hotkey,
+            save_app_center_hotkey,
             show_hotkey_settings,
             restart_app,
             get_app_version,

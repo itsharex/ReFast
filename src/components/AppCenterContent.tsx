@@ -115,6 +115,16 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const [pendingDeleteCount, setPendingDeleteCount] = useState(0);
   const [debuggingAppName, setDebuggingAppName] = useState<string | null>(null);
   
+  // 应用快捷键相关状态
+  const [appHotkeys, setAppHotkeys] = useState<Record<string, { modifiers: string[]; key: string }>>({});
+  const [recordingAppPath, setRecordingAppPath] = useState<string | null>(null);
+  const [appRecordingKeys, setAppRecordingKeys] = useState<string[]>([]);
+  const appRecordingRef = useRef(false);
+  const appLastModifierRef = useRef<string | null>(null);
+  const appLastModifierTimeRef = useRef<number>(0);
+  const appIsCompletingRef = useRef(false);
+  const appFinalKeysRef = useRef<string[] | null>(null);
+  
   // 设置相关状态
   const [activeSettingsPage, setActiveSettingsPage] = useState<SettingsPage>("system");
   const [settings, setSettings] = useState<Settings>({
@@ -620,6 +630,180 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     }
   };
 
+  // 格式化快捷键显示
+  const formatHotkey = (config: { modifiers: string[]; key: string }): string => {
+    const mods = config.modifiers.join(" + ");
+    if (config.modifiers.length === 2 && 
+        config.modifiers[0] === config.modifiers[1] && 
+        config.modifiers[0] === config.key) {
+      return mods;
+    }
+    return `${mods} + ${config.key}`;
+  };
+
+  // 保存应用快捷键
+  const saveAppHotkey = async (appPath: string, config: { modifiers: string[]; key: string } | null) => {
+    try {
+      await tauriApi.saveAppHotkey(appPath, config);
+      if (config) {
+        setAppHotkeys((prev) => ({ ...prev, [appPath]: config }));
+      } else {
+        setAppHotkeys((prev) => {
+          const newHotkeys = { ...prev };
+          delete newHotkeys[appPath];
+          return newHotkeys;
+        });
+      }
+    } catch (error) {
+      console.error("Failed to save app hotkey:", error);
+      alert("保存应用快捷键失败");
+    }
+  };
+
+  // 应用快捷键录制逻辑
+  useEffect(() => {
+    if (!recordingAppPath) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!appRecordingRef.current || appIsCompletingRef.current || e.repeat) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (appFinalKeysRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      const keyMap: Record<string, string> = {
+        "Control": "Ctrl",
+        "Alt": "Alt",
+        "Shift": "Shift",
+        "Meta": "Meta",
+      };
+
+      let key = e.key;
+
+      if (keyMap[key]) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        const mappedKey = keyMap[key];
+        const now = Date.now();
+
+        const isSameModifier = appLastModifierRef.current === mappedKey;
+        const hasPreviousPress = appLastModifierTimeRef.current > 0;
+        const timeSinceLastPress = hasPreviousPress ? now - appLastModifierTimeRef.current : Infinity;
+        const isDoubleTapTime = timeSinceLastPress < 500;
+
+        if (isSameModifier && hasPreviousPress && isDoubleTapTime) {
+          appIsCompletingRef.current = true;
+          appRecordingRef.current = false;
+
+          const finalModifiers: string[] = [mappedKey, mappedKey];
+          appFinalKeysRef.current = finalModifiers;
+
+          const newHotkey: { modifiers: string[]; key: string } = {
+            modifiers: finalModifiers,
+            key: mappedKey,
+          };
+
+          appLastModifierRef.current = null;
+          appLastModifierTimeRef.current = 0;
+
+          setAppRecordingKeys(finalModifiers);
+          saveAppHotkey(recordingAppPath, newHotkey);
+          setRecordingAppPath(null);
+
+          window.removeEventListener("keydown", handleKeyDown, true);
+          window.removeEventListener("keyup", handleKeyUp, true);
+
+          setTimeout(() => {
+            appIsCompletingRef.current = false;
+          }, 300);
+
+          return;
+        }
+
+        if (appFinalKeysRef.current) {
+          return;
+        }
+
+        if (!hasPreviousPress || !isSameModifier || timeSinceLastPress >= 500) {
+          appLastModifierRef.current = mappedKey;
+          appLastModifierTimeRef.current = now;
+          setAppRecordingKeys([mappedKey]);
+        }
+
+        return;
+      }
+
+      appLastModifierRef.current = null;
+      appLastModifierTimeRef.current = 0;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const modifiers: string[] = [];
+      if (e.ctrlKey) modifiers.push("Ctrl");
+      if (e.altKey) modifiers.push("Alt");
+      if (e.shiftKey) modifiers.push("Shift");
+      if (e.metaKey) modifiers.push("Meta");
+
+      if (key === " ") key = "Space";
+      if (key.length === 1) key = key.toUpperCase();
+
+      if (modifiers.length === 0) {
+        setAppRecordingKeys([key]);
+        return;
+      }
+
+      const newHotkey: { modifiers: string[]; key: string } = {
+        modifiers: modifiers,
+        key: key,
+      };
+
+      setAppRecordingKeys([...modifiers, key]);
+      saveAppHotkey(recordingAppPath, newHotkey);
+      setRecordingAppPath(null);
+      appRecordingRef.current = false;
+    };
+
+    const handleKeyUp = () => {
+      if (!appRecordingRef.current) return;
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+    };
+  }, [recordingAppPath]);
+
+  // ESC 键处理（取消应用快捷键录制）
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && recordingAppPath) {
+        setRecordingAppPath(null);
+        appRecordingRef.current = false;
+        setAppRecordingKeys([]);
+        appLastModifierRef.current = null;
+        appLastModifierTimeRef.current = 0;
+        appIsCompletingRef.current = false;
+        appFinalKeysRef.current = null;
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [recordingAppPath]);
+
   const filteredAppIndexList = useMemo(() => {
     if (!appIndexSearch.trim()) return appIndexList;
     const query = appIndexSearch.toLowerCase();
@@ -826,14 +1010,25 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     }
   }, [activeCategory]);
 
-  // 当切换到索引分类时加载索引状态
+  // 加载应用快捷键
+  const loadAppHotkeys = useCallback(async () => {
+    try {
+      const hotkeys = await tauriApi.getAppHotkeys();
+      setAppHotkeys(hotkeys);
+    } catch (error) {
+      console.error("Failed to load app hotkeys:", error);
+    }
+  }, []);
+
+  // 当切换到索引分类时加载索引状态和应用快捷键
   useEffect(() => {
     if (activeCategory === "index") {
       fetchIndexStatus();
       loadFileHistoryList();
       loadBackupList();
+      loadAppHotkeys();
     }
-  }, [activeCategory]);
+  }, [activeCategory, loadAppHotkeys]);
 
   // 监听应用重新扫描事件
   useEffect(() => {
@@ -1956,31 +2151,97 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                 <div className="flex items-center justify-center py-12 text-gray-500 text-sm">暂无索引数据</div>
               ) : (
                 <div className="divide-y divide-gray-100">
-                  {filteredAppIndexList.map((item, idx) => (
-                    <div key={`${item.path}-${idx}`} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50 group">
-                      <div className="w-6 h-6 rounded bg-green-50 text-green-700 flex items-center justify-center text-xs flex-shrink-0">
-                        {idx + 1}
+                  {filteredAppIndexList.map((item, idx) => {
+                    const appHotkey = appHotkeys[item.path];
+                    const isRecordingThis = recordingAppPath === item.path;
+                    return (
+                      <div key={`${item.path}-${idx}`} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50 group relative">
+                        <div className="w-6 h-6 rounded bg-green-50 text-green-700 flex items-center justify-center text-xs flex-shrink-0">
+                          {idx + 1}
+                        </div>
+                        {renderAppIcon(item)}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                          <div className="text-xs text-gray-500 break-all mt-1">{item.path}</div>
+                          {appHotkey && (
+                            <div className="text-xs font-mono text-blue-600 mt-1">
+                              {formatHotkey(appHotkey)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {!isRecordingThis ? (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRecordingAppPath(item.path);
+                                  appRecordingRef.current = true;
+                                  setAppRecordingKeys([]);
+                                  appFinalKeysRef.current = null;
+                                }}
+                                className="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded border border-blue-300 text-blue-600 hover:bg-blue-50 transition"
+                                title="设置快捷键"
+                              >
+                                {appHotkey ? "修改" : "设置"}
+                              </button>
+                              {appHotkey && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    saveAppHotkey(item.path, null);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition"
+                                  title="清除快捷键"
+                                >
+                                  清除
+                                </button>
+                              )}
+                            </>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setRecordingAppPath(null);
+                                appRecordingRef.current = false;
+                                setAppRecordingKeys([]);
+                                appLastModifierRef.current = null;
+                                appLastModifierTimeRef.current = 0;
+                                appIsCompletingRef.current = false;
+                                appFinalKeysRef.current = null;
+                              }}
+                              className="px-2 py-1 text-xs rounded border border-gray-500 text-gray-700 hover:bg-gray-100 transition"
+                            >
+                              取消
+                            </button>
+                          )}
+                          {!item.icon && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDebugAppIcon(item.name);
+                              }}
+                              disabled={debuggingAppName !== null}
+                              className="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="调试图标提取"
+                            >
+                              {debuggingAppName === item.name ? "调试中..." : "调试图标"}
+                            </button>
+                          )}
+                        </div>
+                        {isRecordingThis && (
+                          <div className="absolute left-0 right-0 top-full mt-1 px-6 py-2 bg-yellow-50 border border-yellow-200 rounded-md text-xs text-yellow-800 z-10">
+                            正在录制... 请按下您想要设置的快捷键组合
+                            {appRecordingKeys.length > 0 && (
+                              <div className="mt-1 text-yellow-600">
+                                已按下: {appRecordingKeys.join(" + ")}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {renderAppIcon(item)}
-                      <div className="min-w-0 flex-1">
-                        <div className="text-sm font-medium text-gray-900">{item.name}</div>
-                        <div className="text-xs text-gray-500 break-all mt-1">{item.path}</div>
-                      </div>
-                      {!item.icon && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDebugAppIcon(item.name);
-                          }}
-                          disabled={debuggingAppName !== null}
-                          className="opacity-0 group-hover:opacity-100 px-2 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="调试图标提取"
-                        >
-                          {debuggingAppName === item.name ? "调试中..." : "调试图标"}
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

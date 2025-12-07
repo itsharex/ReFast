@@ -13,6 +13,8 @@ pub struct Settings {
     #[serde(default)]
     pub hotkey: Option<HotkeyConfig>,
     #[serde(default)]
+    pub app_center_hotkey: Option<HotkeyConfig>,
+    #[serde(default)]
     pub plugin_hotkeys: HashMap<String, HotkeyConfig>,
     #[serde(default)]
     pub app_hotkeys: HashMap<String, HotkeyConfig>,
@@ -36,7 +38,9 @@ impl Default for Settings {
             ollama: OllamaSettings::default(),
             startup_enabled: false,
             hotkey: None,
+            app_center_hotkey: None,
             plugin_hotkeys: HashMap::new(),
+            app_hotkeys: HashMap::new(),
             close_on_blur: default_close_on_blur(),
             result_style: default_result_style(),
         }
