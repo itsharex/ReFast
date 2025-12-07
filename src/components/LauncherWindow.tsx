@@ -4145,10 +4145,10 @@ export function LauncherWindow() {
                                 style={{
                                   animation: `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
                                   marginLeft: execIndex === 0 && isSelected ? '10px' : '0px', // 第一个item选中时添加左边距，防止放大后被裁剪
-                                  width: '86px',
-                                  height: '86px',
-                                  minWidth: '86px',
-                                  minHeight: '86px',
+                                  width: '80px',
+                                  height: '80px',
+                                  minWidth: '80px',
+                                  minHeight: '80px',
                                 }}
                               >
                                 {isSelected && (
@@ -4176,7 +4176,7 @@ export function LauncherWindow() {
                                         <img 
                                           src={iconToUse} 
                                           alt={result.displayName}
-                                          className={`object-contain ${isSelected ? 'w-10 h-10' : 'w-8 h-8'}`}
+                                          className={`object-contain ${isSelected ? 'w-9 h-9' : 'w-7 h-7'}`}
                                           style={{ imageRendering: 'auto' as const }}
                                           onError={(e) => {
                                             const target = e.target as HTMLImageElement;
@@ -4184,7 +4184,7 @@ export function LauncherWindow() {
                                             const parent = target.parentElement;
                                             if (parent && !parent.querySelector('svg')) {
                                               const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                                              svg.setAttribute('class', `${isSelected ? 'w-8 h-8' : 'w-6 h-6'} ${isSelected ? 'text-white' : 'text-gray-500'}`);
+                                              svg.setAttribute('class', `${isSelected ? 'w-7 h-7' : 'w-5 h-5'} ${isSelected ? 'text-white' : 'text-gray-500'}`);
                                               svg.setAttribute('fill', 'none');
                                               svg.setAttribute('stroke', 'currentColor');
                                               svg.setAttribute('viewBox', '0 0 24 24');
@@ -4202,7 +4202,7 @@ export function LauncherWindow() {
                                     } else {
                                       return (
                                         <svg
-                                          className={`${isSelected ? 'w-8 h-8' : 'w-6 h-6'} ${isSelected ? 'text-white' : 'text-gray-500'}`}
+                                          className={`${isSelected ? 'w-7 h-7' : 'w-5 h-5'} ${isSelected ? 'text-white' : 'text-gray-500'}`}
                                           fill="none"
                                           stroke="currentColor"
                                           viewBox="0 0 24 24"
@@ -4223,7 +4223,7 @@ export function LauncherWindow() {
                                       );
                                     }
                                   })() : result.type === "plugin" && result.plugin ? (
-                                    getPluginIcon(result.plugin.id, `${isSelected ? 'w-8 h-8' : 'w-6 h-6'} ${isSelected ? (resultStyle === "soft" ? 'text-blue-600' : resultStyle === "skeuomorphic" ? 'text-[#4a6fa5]' : 'text-indigo-600') : 'text-purple-500'}`)
+                                    getPluginIcon(result.plugin.id, `${isSelected ? 'w-7 h-7' : 'w-5 h-5'} ${isSelected ? (resultStyle === "soft" ? 'text-blue-600' : resultStyle === "skeuomorphic" ? 'text-[#4a6fa5]' : 'text-indigo-600') : 'text-purple-500'}`)
                                   ) : null}
                                 </div>
                                 <div 
@@ -4244,9 +4244,9 @@ export function LauncherWindow() {
                                     wordBreak: 'break-word',
                                     textOverflow: 'ellipsis',
                                     lineHeight: '1.3',
-                                    maxHeight: '2.6em',
-                                    minHeight: '2.6em',
-                                    width: '70px',
+                                    maxHeight: '2.4em',
+                                    minHeight: '2.4em',
+                                    width: '65px',
                                     textAlign: 'center'
                                   }}
                                   dangerouslySetInnerHTML={{ __html: highlightText(result.displayName, query) }}
