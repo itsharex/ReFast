@@ -1435,8 +1435,9 @@ public class IconExtractor {
         
         // For single character queries, limit the search to avoid slow performance
         // Single characters match too many apps, so we limit the search scope
+        // But we need to check enough apps to find matches like "qq" when searching "q"
         let MAX_RESULTS_TO_CHECK: usize = if query_lower.len() == 1 {
-            50 // For single character queries, only check first 50 apps for faster response
+            200 // For single character queries, check first 200 apps to ensure we find matches
         } else {
             300 // For longer queries, check up to 300 apps
         };
