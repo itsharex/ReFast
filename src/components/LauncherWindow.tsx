@@ -12,6 +12,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { plugins, searchPlugins, executePlugin } from "../plugins";
 import { AppCenterContent } from "./AppCenterContent";
 import { MemoModal } from "./MemoModal";
+import { ContextMenu } from "./ContextMenu";
 import {
   extractUrls,
   isValidJson,
@@ -111,7 +112,6 @@ export function LauncherWindow() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const horizontalScrollContainerRef = useRef<HTMLDivElement>(null);
-  const contextMenuRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isWindowDraggingRef = useRef(false);
   // 记录最近一次已处理的剪切板 URL，避免同一个链接在一次会话中反复弹窗
@@ -3408,29 +3408,6 @@ export function LauncherWindow() {
     }
   };
 
-  // Close context menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
-      }
-    };
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setContextMenu(null);
-      }
-    };
-
-    if (contextMenu) {
-      document.addEventListener("mousedown", handleClickOutside);
-      document.addEventListener("keydown", handleEscape);
-      return () => {
-        document.removeEventListener("mousedown", handleClickOutside);
-        document.removeEventListener("keydown", handleEscape);
-      };
-    }
-  }, [contextMenu]);
 
   const handlePaste = async (e: React.ClipboardEvent) => {
     const clipboardTypes = Array.from(e.clipboardData.types);
@@ -4821,248 +4798,73 @@ export function LauncherWindow() {
 
 
       {/* Context Menu */}
-      {contextMenu && (() => {
-        // 检查是否有菜单项需要显示
-        const hasFileMenu = contextMenu.result.type === "file" ||
-          contextMenu.result.type === "everything" ||
-          contextMenu.result.type === "system_folder" ||
-          contextMenu.result.type === "app";
-        const hasMemoMenu = contextMenu.result.type === "memo" && contextMenu.result.memo;
-        const hasUrlMenu = contextMenu.result.type === "url" && contextMenu.result.url;
-        const hasJsonMenu = contextMenu.result.type === "json_formatter" && contextMenu.result.jsonContent;
-        const hasAiMenu = contextMenu.result.type === "ai" && contextMenu.result.aiAnswer;
-        
-        // 如果没有菜单项，不显示菜单
-        if (!hasFileMenu && !hasMemoMenu && !hasUrlMenu && !hasJsonMenu && !hasAiMenu) {
-          return null;
-        }
-        
-        return (
-          <div
-            ref={contextMenuRef}
-            className="fixed bg-white border border-gray-200 text-gray-800 rounded-lg shadow-xl py-1 min-w-[160px] z-50"
-            style={{
-              left: `${contextMenu.x}px`,
-              top: `${contextMenu.y}px`,
-            }}
-          >
-            {hasFileMenu && (
-              <>
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleRevealInFolder();
-                  }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
-                >
-                  打开所在文件夹
-                </button>
-                {/* 为应用类型显示调试图标按钮 */}
-                {contextMenu.result.type === "app" && contextMenu.result.app && (
-                  <button
-                    onClick={async (e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setContextMenu(null);
-                      try {
-                        const app = contextMenu.result.app!;
-                        const hasIcon = app.icon && app.icon.trim() !== '';
-                        const result = await tauriApi.debugAppIcon(app.name);
-                        console.log('=== 图标调试结果 ===');
-                        console.log('应用名称:', app.name);
-                        console.log('应用路径:', app.path);
-                        console.log('当前图标状态:', hasIcon ? '有图标' : '无图标');
-                        console.log('图标数据长度:', app.icon?.length || 0);
-                        console.log('调试信息:\n', result);
-                        alert(`应用: ${app.name}\n路径: ${app.path}\n图标状态: ${hasIcon ? '有图标' : '无图标'}\n\n${result}`);
-                        // 尝试重新加载应用列表以获取可能的图标更新
-                        await searchApplications(query);
-                      } catch (error: any) {
-                        console.error('调试失败:', error);
-                        alert(`调试失败: ${error?.message || error}`);
-                      }
-                    }}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors border-t border-gray-100"
-                  >
-                    调试图标提取
-                  </button>
-                )}
-                {/* 为文件类型（.lnk 或 .exe）也显示调试图标按钮 */}
-                {contextMenu.result.type === "file" && contextMenu.result.file && (() => {
-                  const filePath = contextMenu.result.file.path || '';
-                  const isLnkOrExe = filePath.toLowerCase().endsWith('.lnk') || filePath.toLowerCase().endsWith('.exe');
-                  const fileName = contextMenu.result.file.name || '';
-                  return isLnkOrExe ? (
-                    <button
-                      onClick={async (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setContextMenu(null);
-                        try {
-                          const result = await tauriApi.debugAppIcon(fileName.replace(/\.(lnk|exe)$/i, ''));
-                          console.log('=== 图标调试结果（文件类型）===');
-                          console.log('文件名称:', fileName);
-                          console.log('文件路径:', filePath);
-                          console.log('调试信息:\n', result);
-                          alert(`文件: ${fileName}\n路径: ${filePath}\n\n${result}`);
-                          // 尝试重新搜索
-                          await searchApplications(query);
-                        } catch (error: any) {
-                          console.error('调试失败:', error);
-                          alert(`调试失败: ${error?.message || error}`);
-                        }
-                      }}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }}
-                      className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors border-t border-gray-100"
-                    >
-                      调试图标提取
-                    </button>
-                  ) : null;
-                })()}
-              </>
-            )}
-            {hasMemoMenu && (
-              <>
-                <button
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setSelectedMemo(contextMenu.result.memo!);
-                    setMemoEditTitle(contextMenu.result.memo!.title);
-                    setMemoEditContent(contextMenu.result.memo!.content);
-                    setIsEditingMemo(true);
-                    setIsMemoModalOpen(true);
-                    setContextMenu(null);
-                  }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
-                >
-                  编辑备忘录
-                </button>
-                <button
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (!contextMenu.result.memo) return;
-                    if (!confirm("确定要删除这条备忘录吗？")) {
-                      setContextMenu(null);
-                      return;
-                    }
-                    try {
-                      await tauriApi.deleteMemo(contextMenu.result.memo.id);
-                      const list = await tauriApi.getAllMemos();
-                      setMemos(list);
-                      setContextMenu(null);
-                      // 如果删除的是当前显示的备忘录，关闭弹窗
-                      if (selectedMemo?.id === contextMenu.result.memo.id) {
-                        setIsMemoModalOpen(false);
-                        setSelectedMemo(null);
-                      }
-                    } catch (error) {
-                      console.error("Failed to delete memo:", error);
-                      alert(`删除备忘录失败: ${error}`);
-                      setContextMenu(null);
-                    }
-                  }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                >
-                  删除备忘录
-                </button>
-              </>
-            )}
-            {hasUrlMenu && (
-              <button
-                onClick={async (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  try {
-                    await tauriApi.openUrl(contextMenu.result.url!);
-                    setContextMenu(null);
-                  } catch (error) {
-                    console.error("Failed to open URL:", error);
-                    alert(`打开链接失败: ${error}`);
-                    setContextMenu(null);
-                  }
-                }}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
-              >
-                打开链接
-              </button>
-            )}
-            {hasJsonMenu && (
-              <button
-                onClick={async (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  try {
-                    await navigator.clipboard.writeText(contextMenu.result.jsonContent!);
-                    alert("JSON 内容已复制到剪贴板");
-                    setContextMenu(null);
-                  } catch (error) {
-                    console.error("Failed to copy JSON:", error);
-                    alert("复制失败，请手动复制");
-                    setContextMenu(null);
-                  }
-                }}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
-              >
-                复制 JSON
-              </button>
-            )}
-            {hasAiMenu && (
-              <button
-                onClick={async (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  try {
-                    await navigator.clipboard.writeText(contextMenu.result.aiAnswer!);
-                    alert("AI 回答已复制到剪贴板");
-                    setContextMenu(null);
-                  } catch (error) {
-                    console.error("Failed to copy AI answer:", error);
-                    alert("复制失败，请手动复制");
-                    setContextMenu(null);
-                  }
-                }}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
-              >
-                复制回答
-              </button>
-            )}
-          </div>
-        );
-      })()}
+      <ContextMenu
+        menu={contextMenu}
+        onClose={() => setContextMenu(null)}
+        onRevealInFolder={handleRevealInFolder}
+        onDebugAppIcon={async (appName: string) => {
+          try {
+            const result = await tauriApi.debugAppIcon(appName);
+            console.log("=== 图标调试结果 ===");
+            console.log("应用名称:", appName);
+            console.log("调试信息:\n", result);
+            alert(`应用: ${appName}\n\n${result}`);
+            // 尝试重新加载应用列表以获取可能的图标更新
+            await searchApplications(query);
+          } catch (error: any) {
+            console.error("调试失败:", error);
+            alert(`调试失败: ${error?.message || error}`);
+          }
+        }}
+        onDebugFileIcon={async (fileName: string, filePath: string) => {
+          try {
+            const result = await tauriApi.debugAppIcon(fileName);
+            console.log("=== 图标调试结果（文件类型）===");
+            console.log("文件名称:", fileName);
+            console.log("文件路径:", filePath);
+            console.log("调试信息:\n", result);
+            alert(`文件: ${fileName}\n路径: ${filePath}\n\n${result}`);
+            // 尝试重新搜索
+            await searchApplications(query);
+          } catch (error: any) {
+            console.error("调试失败:", error);
+            alert(`调试失败: ${error?.message || error}`);
+          }
+        }}
+        onEditMemo={() => {
+          if (!contextMenu?.result.memo) return;
+          setSelectedMemo(contextMenu.result.memo);
+          setMemoEditTitle(contextMenu.result.memo.title);
+          setMemoEditContent(contextMenu.result.memo.content);
+          setIsEditingMemo(true);
+          setIsMemoModalOpen(true);
+        }}
+        onDeleteMemo={async (memoId: string) => {
+          await tauriApi.deleteMemo(memoId);
+        }}
+        onOpenUrl={async (url: string) => {
+          await tauriApi.openUrl(url);
+        }}
+        onCopyJson={async (json: string) => {
+          await navigator.clipboard.writeText(json);
+          alert("JSON 内容已复制到剪贴板");
+        }}
+        onCopyAiAnswer={async (answer: string) => {
+          await navigator.clipboard.writeText(answer);
+          alert("AI 回答已复制到剪贴板");
+        }}
+        query={query}
+        selectedMemoId={selectedMemo?.id || null}
+        onRefreshMemos={async () => {
+          const list = await tauriApi.getAllMemos();
+          setMemos(list);
+        }}
+        onCloseMemoModal={() => {
+          setIsMemoModalOpen(false);
+          setSelectedMemo(null);
+        }}
+        tauriApi={tauriApi}
+      />
 
       {/* Memo Detail Modal */}
       <MemoModal
