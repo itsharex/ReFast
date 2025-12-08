@@ -127,6 +127,22 @@ div.results-list-scroll::-webkit-scrollbar-thumb:active {
   }
 }
 
+/* 应用启动动画 - 缩放+淡出效果 */
+@keyframes launchApp {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(0.95);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
 /* 搜索结果高亮文本样式 */
 .highlight-match {
   color: #ea580c; /* orange-600 */

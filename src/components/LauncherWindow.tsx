@@ -95,6 +95,7 @@ export function LauncherWindow() {
   const [isPluginListModalOpen, setIsPluginListModalOpen] = useState(false);
   const [systemFolders, setSystemFolders] = useState<SystemFolderItem[]>([]);
   const [openHistory, setOpenHistory] = useState<Record<string, number>>({});
+  const [launchingAppPath, setLaunchingAppPath] = useState<string | null>(null); // 正在启动的应用路径
   const [resultStyle, setResultStyle] = useState<ResultStyle>(() => {
     const cached = localStorage.getItem("result-style");
     if (cached === "soft" || cached === "skeuomorphic" || cached === "compact") {
@@ -3419,17 +3420,18 @@ export function LauncherWindow() {
 
   const handleLaunch = async (result: SearchResult) => {
     try {
-      // Record open history for all types
+      // Record open history for all types (but delay updating state to avoid reordering during animation)
+      let recordHistoryPromise: Promise<void> | null = null;
       try {
-        await tauriApi.recordOpenHistory(result.path);
-        // Update local state immediately for better UX
-        setOpenHistory(prev => ({
-          ...prev,
-          [result.path]: Date.now() / 1000, // Convert to seconds to match backend
-        }));
+        recordHistoryPromise = tauriApi.recordOpenHistory(result.path);
+        // Don't update local state immediately to prevent list reordering during animation
       } catch (error) {
         console.error("Failed to record open history:", error);
       }
+
+      // Store the path and timestamp for later state update (after animation)
+      const pathToUpdate = result.path;
+      const timestampToUpdate = Date.now() / 1000;
 
       if (result.type === "ai" && result.aiAnswer) {
         // AI 回答点击时，可以复制到剪贴板或什么都不做
@@ -3484,9 +3486,36 @@ export function LauncherWindow() {
         return;
       } else if (result.type === "app" && result.app) {
         try {
+          // 设置正在启动的应用路径，触发动画
+          setLaunchingAppPath(result.app.path);
+          
+          // 等待动画完成（200ms）
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+          // 启动应用
           await tauriApi.launchApplication(result.app);
           trackEvent("app_launched", { name: result.app.name });
+          
+          // 动画完成后，更新本地历史状态（此时启动器即将关闭，不会影响列表顺序）
+          if (pathToUpdate) {
+            setOpenHistory(prev => ({
+              ...prev,
+              [pathToUpdate]: timestampToUpdate,
+            }));
+          }
+          
+          // 清除启动状态
+          setLaunchingAppPath(null);
         } catch (launchError: any) {
+          // 如果启动失败，清除启动状态
+          setLaunchingAppPath(null);
+          // 即使启动失败，也更新历史记录（因为用户确实尝试打开了）
+          if (pathToUpdate) {
+            setOpenHistory(prev => ({
+              ...prev,
+              [pathToUpdate]: timestampToUpdate,
+            }));
+          }
           const errorMsg = launchError?.message || launchError?.toString() || "";
           // 检测是否是文件不存在的错误，自动删除索引
           if (
@@ -3573,6 +3602,16 @@ export function LauncherWindow() {
         setContextMenu(null);
         return;
       }
+      
+      // 对于非应用类型，在启动器关闭前更新历史记录状态
+      // 应用类型已经在动画完成后更新了，这里跳过
+      if (result.type !== "app" && pathToUpdate) {
+        setOpenHistory(prev => ({
+          ...prev,
+          [pathToUpdate]: timestampToUpdate,
+        }));
+      }
+      
       // Hide launcher window after launch
       await hideLauncherAndResetState();
     } catch (error: any) {
@@ -4377,6 +4416,7 @@ export function LauncherWindow() {
                         >
                           {horizontalResults.map((result, execIndex) => {
                             const isSelected = selectedHorizontalIndex === execIndex;
+                            const isLaunching = result.type === "app" && launchingAppPath === result.path;
                             return (
                               <div
                                 key={`executable-${result.path}-${execIndex}`}
@@ -4401,7 +4441,9 @@ export function LauncherWindow() {
                                     : "bg-white hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:shadow-md"
                                 }`}
                                 style={{
-                                  animation: `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
+                                  animation: isLaunching 
+                                    ? `launchApp 0.2s ease-out forwards` 
+                                    : `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
                                   marginLeft: execIndex === 0 && isSelected ? '10px' : '0px', // 第一个item选中时添加左边距，防止放大后被裁剪
                                   width: '80px',
                                   height: '80px',
@@ -4468,6 +4510,7 @@ export function LauncherWindow() {
                       const isSelected = selectedVerticalIndex === index;
                       // 计算垂直结果的序号（从1开始，只计算垂直结果）
                       const verticalIndex = index + 1;
+                      const isLaunching = result.type === "app" && launchingAppPath === result.path;
                       return (
                 <div
                   key={`${result.type}-${result.path}-${index}`}
@@ -4487,7 +4530,9 @@ export function LauncherWindow() {
                   onContextMenu={(e) => handleContextMenu(e, result)}
                   className={theme.card(isSelected)}
                   style={{
-                    animation: `fadeInUp 0.18s ease-out ${index * 0.02}s both`,
+                    animation: isLaunching 
+                      ? `launchApp 0.2s ease-out forwards` 
+                      : `fadeInUp 0.18s ease-out ${index * 0.02}s both`,
                   }}
                 >
                   <div className={theme.indicator(isSelected)} />
