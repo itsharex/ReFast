@@ -3937,6 +3937,23 @@ export function LauncherWindow() {
             style={{ cursor: 'move' }}
           >
             <div className="flex items-center gap-3">
+              {/* 拖拽手柄图标 */}
+              <svg
+                className={layout.dragHandleIcon}
+                fill="currentColor"
+                viewBox="0 0 24 24"
+                onMouseDown={async (e) => {
+                  e.stopPropagation();
+                  await startWindowDragging();
+                }}
+              >
+                <circle cx="9" cy="5" r="1.5" />
+                <circle cx="15" cy="5" r="1.5" />
+                <circle cx="9" cy="12" r="1.5" />
+                <circle cx="15" cy="12" r="1.5" />
+                <circle cx="9" cy="19" r="1.5" />
+                <circle cx="15" cy="19" r="1.5" />
+              </svg>
               <svg
                 className={layout.searchIcon}
                 fill="none"
