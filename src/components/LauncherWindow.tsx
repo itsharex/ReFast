@@ -833,7 +833,7 @@ export function LauncherWindow() {
     isWindowDraggingRef.current = true;
     try {
       await window.startDragging();
-    } catch (error) {
+    } catch (error: any) {
       isWindowDraggingRef.current = false;
       console.error("Failed to start dragging:", error);
     }
@@ -2429,6 +2429,7 @@ export function LauncherWindow() {
     }, 50);
   }, [windowWidth, isMemoModalOpen, isPluginListModalOpen, isResizing, clipboardUrlToOpen]);
 
+
   // Handle window width resizing
   useEffect(() => {
     if (!isResizing) return;
@@ -3930,15 +3931,28 @@ export function LauncherWindow() {
           {/* Search Box */}
           <div 
             className={`${layout.header} select-none`}
-            data-tauri-drag-region
-            style={{ cursor: 'move' }}
+            onMouseDown={async (e) => {
+              // 手动触发拖拽，移除 data-tauri-drag-region 避免冲突
+              // 排除输入框和应用中心按钮
+              // 注意：wrapper 区域会 stopPropagation，所以这里主要处理 wrapper 上方的区域
+              const target = e.target as HTMLElement;
+              const isInput = target.tagName === 'INPUT' || target.closest('input');
+              const isAppCenterButton = target.closest('[title="应用中心"]');
+              if (!isInput && !isAppCenterButton) {
+                // 使用和 wrapper 相同的可靠逻辑：先阻止默认行为和冒泡，再调用拖拽
+                e.preventDefault();
+                e.stopPropagation();
+                await startWindowDragging();
+              }
+            }}
           >
-            <div className="flex items-center gap-3 select-none" data-tauri-drag-region>
+            <div className="flex items-center gap-3 select-none h-full">
               {/* 拖拽手柄图标 */}
               <svg
                 className={layout.dragHandleIcon}
                 fill="currentColor"
                 viewBox="0 0 24 24"
+                style={{ pointerEvents: 'none' }}
               >
                 <circle cx="9" cy="5" r="1.5" />
                 <circle cx="15" cy="5" r="1.5" />
@@ -3952,6 +3966,7 @@ export function LauncherWindow() {
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
+                style={{ pointerEvents: 'none' }}
               >
                 <path
                   strokeLinecap="round"
@@ -3962,9 +3977,25 @@ export function LauncherWindow() {
               </svg>
               {/* 输入框包裹层 - 负责占位和拖拽，缩小 input 的实际点击区域 */}
               <div 
-                className="flex-1 flex items-center h-full cursor-move select-none" 
-                data-tauri-drag-region
-                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+                className="flex-1 flex select-none" 
+                style={{ 
+                  userSelect: 'none', 
+                  WebkitUserSelect: 'none',
+                  height: '100%',
+                  alignItems: 'center'
+                }}
+                onMouseDown={async (e) => {
+                  // 如果点击的不是输入框，触发拖拽（这个逻辑是可靠的，从不失效）
+                  const target = e.target as HTMLElement;
+                  const isInput = target.tagName === 'INPUT' || target.closest('input');
+                  if (!isInput) {
+                    // 阻止事件冒泡，避免 header 重复处理
+                    e.stopPropagation();
+                    e.preventDefault();
+                    await startWindowDragging();
+                  }
+                  // 如果是输入框，不阻止冒泡，让输入框自己处理
+                }}
               >
                 <input
                   ref={inputRef}
