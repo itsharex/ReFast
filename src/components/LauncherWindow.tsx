@@ -3421,9 +3421,8 @@ export function LauncherWindow() {
   const handleLaunch = async (result: SearchResult) => {
     try {
       // Record open history for all types (but delay updating state to avoid reordering during animation)
-      let recordHistoryPromise: Promise<void> | null = null;
       try {
-        recordHistoryPromise = tauriApi.recordOpenHistory(result.path);
+        void tauriApi.recordOpenHistory(result.path);
         // Don't update local state immediately to prevent list reordering during animation
       } catch (error) {
         console.error("Failed to record open history:", error);
