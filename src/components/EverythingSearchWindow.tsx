@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
 import { tauriApi } from "../api/tauri";
 import type { EverythingResult, FilePreview } from "../types";
 
@@ -22,7 +21,13 @@ const CUSTOM_FILTER_PREFERENCE_KEY = "everything_custom_filters";
 const MAX_RESULTS_PREFERENCE_KEY = "everything_max_results_pref";
 const MATCH_WHOLE_WORD_PREFERENCE_KEY = "everything_match_whole_word";
 const MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY = "everything_match_folder_name_only";
-const DEFAULT_MAX_RESULTS = 500;
+const DEFAULT_MAX_RESULTS = 5000; // 会作为软性展示上限，后端仍可返回更多供分页
+const ABS_MAX_RESULTS = 2000000; // 单次会话展示硬上限，防止无限渲染
+const SAFE_DISPLAY_LIMIT = 2000000; // 仅作为防护兜底
+const PAGE_SIZE = 500; // 后端分段拉取尺寸
+const MAX_CACHED_PAGES = 8; // 前端缓存页数上限（LRU）
+const ITEM_HEIGHT = 96; // 预估单行高度，用于简单虚拟化
+const OVERSCAN = 6; // 额外渲染的行数，降低滚动抖动
 
 const QUICK_FILTERS: FilterItem[] = [
   { id: "all", label: "全部", extensions: [] },
@@ -75,9 +80,7 @@ const QUICK_FILTERS: FilterItem[] = [
 
 export function EverythingSearchWindow() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<EverythingResult[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
-  const [currentCount, setCurrentCount] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
   const [isEverythingAvailable, setIsEverythingAvailable] = useState(false);
   const [everythingError, setEverythingError] = useState<string | null>(null);
@@ -94,10 +97,21 @@ export function EverythingSearchWindow() {
   const [matchFolderNameOnly, setMatchFolderNameOnly] = useState(false);
   const [maxResults, setMaxResults] = useState<number>(DEFAULT_MAX_RESULTS);
   const [showSyntaxHelp, setShowSyntaxHelp] = useState(false);
-  
-  const currentSearchRef = useRef<{ query: string; cancelled: boolean } | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionMode, setSessionMode] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [cacheVersion, setCacheVersion] = useState(0); // 仅用于触发渲染
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
+  const [softLimitWarning, setSoftLimitWarning] = useState<string | null>(null);
+
   const debounceTimeoutRef = useRef<number | null>(null);
   const previewRequestIdRef = useRef(0);
+  const inflightPagesRef = useRef<Set<number>>(new Set());
+  const pageCacheRef = useRef<Map<number, EverythingResult[]>>(new Map());
+  const pageOrderRef = useRef<number[]>([]);
+  const pendingSessionIdRef = useRef<string | null>(null);
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
 
   const activeFilter = useMemo<FilterItem | undefined>(() => {
     const builtIn = QUICK_FILTERS.find((f) => f.id === activeFilterId);
@@ -111,6 +125,42 @@ export function EverythingSearchWindow() {
   const isEditingExistingFilter = useMemo(() => {
     return customFilters.some((f) => f.id === activeFilterId);
   }, [activeFilterId, customFilters]);
+
+  const startSessionFn =
+    (tauriApi as any).startEverythingSearchSession as
+      | ((
+          searchQuery: string,
+          opts: {
+            extensions?: string[];
+            maxResults?: number;
+            sortKey?: SortKey;
+            sortOrder?: SortOrder;
+            matchWholeWord?: boolean;
+            matchFolderNameOnly?: boolean;
+          }
+        ) => Promise<{ sessionId: string; totalCount: number; truncated?: boolean }>)
+      | undefined;
+
+  const getRangeFn =
+    (tauriApi as any).getEverythingSearchRange as
+      | ((
+          sessionId: string,
+          offset: number,
+          limit: number,
+          opts: {
+            sortKey?: SortKey;
+            sortOrder?: SortOrder;
+            extensions?: string[];
+            matchWholeWord?: boolean;
+            matchFolderNameOnly?: boolean;
+          }
+        ) => Promise<{ offset: number; items: EverythingResult[]; totalCount?: number }>)
+      | undefined;
+
+  const closeSessionFn =
+    (tauriApi as any).closeEverythingSearchSession as
+      | ((sessionId: string) => Promise<void>)
+      | undefined;
 
   // 加载偏好
   useEffect(() => {
@@ -239,14 +289,6 @@ export function EverythingSearchWindow() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY, matchFolderNameOnly.toString());
-    } catch {
-      // ignore
-    }
-  }, [matchFolderNameOnly]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem(MAX_RESULTS_PREFERENCE_KEY, maxResults.toString());
     } catch {
       // ignore
@@ -268,235 +310,302 @@ export function EverythingSearchWindow() {
     checkStatus();
   }, []);
 
-  // 监听批次结果事件
-  useEffect(() => {
-    let unlistenFn: (() => void) | null = null;
-
-    const setupListener = async () => {
-      try {
-        unlistenFn = await listen<{
-          results: EverythingResult[];
-          total_count: number;
-          current_count: number;
-        }>("everything-search-batch", (event) => {
-          const { results: batchResults, total_count, current_count } = event.payload;
-          
-          if (currentSearchRef.current?.cancelled) {
-            return;
-          }
-
-          // 合并批次结果
-          setResults(prev => {
-            const seenPaths = new Set(prev.map(r => r.path));
-            const newResults = batchResults.filter(r => !seenPaths.has(r.path));
-            return [...prev, ...newResults];
-          });
-          setTotalCount(total_count);
-          setCurrentCount(current_count);
-        });
-      } catch (error) {
-        console.error("Failed to setup Everything batch listener:", error);
-      }
-    };
-
-    setupListener();
-
-    return () => {
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
+  // ---------- 会话 & 分页 ----------
+  const resetCaches = useCallback(() => {
+    pageCacheRef.current.clear();
+    pageOrderRef.current = [];
+    inflightPagesRef.current.clear();
+    setCacheVersion((v) => v + 1);
+    setSessionError(null);
   }, []);
 
-  // 搜索函数
-  const searchEverything = useCallback(async (searchQuery: string) => {
-    if (!searchQuery || searchQuery.trim() === "") {
-      setResults([]);
-      setTotalCount(null);
-      setCurrentCount(0);
-      setIsSearching(false);
-      if (currentSearchRef.current) {
-        currentSearchRef.current.cancelled = true;
-        currentSearchRef.current = null;
+  const closeSessionSafe = useCallback(
+    async (id?: string | null) => {
+      const target = id ?? sessionId;
+      if (!target || !closeSessionFn) return;
+      try {
+        await closeSessionFn(target);
+      } catch (error) {
+        console.warn("关闭搜索会话失败", error);
       }
-      return;
-    }
+    },
+    [sessionId, closeSessionFn]
+  );
 
-    if (!isEverythingAvailable) {
-      setResults([]);
-      setTotalCount(null);
-      setCurrentCount(0);
-      setIsSearching(false);
-      return;
-    }
-
-    const extFilter =
-      activeFilter && activeFilter.extensions.length > 0
-        ? activeFilter.extensions
-        : undefined;
-    // searchKey 需要包含所有影响搜索结果的选项，以便正确检测查询是否变化
-    const searchKey = `${searchQuery}::${extFilter?.join(",") ?? "all"}::wholeWord:${matchWholeWord}::folderOnly:${matchFolderNameOnly}`;
-
-    // 取消之前的搜索
-    if (currentSearchRef.current) {
-      if (currentSearchRef.current.query === searchKey) {
-        return; // 相同查询，跳过
+  const applySoftLimitHint = useCallback(
+    (count: number) => {
+      const maxDisplayable = Math.min(maxResults || ABS_MAX_RESULTS, ABS_MAX_RESULTS);
+      if (count > maxDisplayable) {
+        setSoftLimitWarning(
+          `出于性能考虑，仅展示前 ${maxDisplayable.toLocaleString()} 条结果，请通过关键词或过滤器缩小范围。`
+        );
+      } else {
+        setSoftLimitWarning(null);
       }
-      currentSearchRef.current.cancelled = true;
-    }
+    },
+    [maxResults]
+  );
 
-    const searchRequest = { query: searchKey, cancelled: false };
-    currentSearchRef.current = searchRequest;
-
-    setResults([]);
-    setTotalCount(null);
-    setCurrentCount(0);
-    setIsSearching(true);
-
-    try {
-      const response = await tauriApi.searchEverything(searchQuery, {
-        extensions: extFilter,
-        maxResults: maxResults,
-        matchWholeWord: matchWholeWord,
-        matchFolderNameOnly: matchFolderNameOnly,
-      });
-      
-      if (currentSearchRef.current?.cancelled || 
-          currentSearchRef.current?.query !== searchKey) {
+  const startSearchSession = useCallback(
+    async (searchQuery: string) => {
+      if (!searchQuery || searchQuery.trim() === "") {
+        await closeSessionSafe();
+        resetCaches();
+        setSessionId(null);
+        setSessionMode(false);
+        setTotalCount(null);
+        setIsSearching(false);
+        return;
+      }
+      if (!isEverythingAvailable) {
+        setSessionMode(false);
+        setSessionId(null);
+        setTotalCount(null);
+        setIsSearching(false);
         return;
       }
 
-      // 去重
-      const seenPaths = new Map<string, EverythingResult>();
-      const uniqueResults: EverythingResult[] = [];
-      for (const result of response.results) {
-        if (!seenPaths.has(result.path)) {
-          seenPaths.set(result.path, result);
-          uniqueResults.push(result);
+      const trimmed = searchQuery.trim();
+      const extFilter =
+        activeFilter && activeFilter.extensions.length > 0 ? activeFilter.extensions : undefined;
+      const maxResultsToUse = Math.min(maxResults, ABS_MAX_RESULTS);
+
+      // 关闭旧会话
+      await closeSessionSafe();
+      resetCaches();
+      setIsSearching(true);
+      setSessionMode(!!(startSessionFn && getRangeFn));
+      setSessionError(null);
+
+      // 若后端尚未升级，回退老的批次接口
+      if (!startSessionFn || !getRangeFn) {
+        try {
+          const response = await tauriApi.searchEverything(trimmed, {
+            extensions: extFilter,
+            maxResults: maxResultsToUse,
+            matchWholeWord,
+            matchFolderNameOnly,
+          });
+          const limited = response.results.slice(0, Math.min(maxResultsToUse, SAFE_DISPLAY_LIMIT));
+          const fallbackTotal = Math.min(response.total_count ?? limited.length, limited.length);
+
+          // 将结果按 PAGE_SIZE 切片缓存，避免滚动到后续页出现“加载中”
+          pageCacheRef.current.clear();
+          pageOrderRef.current = [];
+          const pageCount = Math.ceil(limited.length / PAGE_SIZE);
+          for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+            const start = pageIndex * PAGE_SIZE;
+            const slice = limited.slice(start, start + PAGE_SIZE);
+            pageCacheRef.current.set(pageIndex, slice);
+            pageOrderRef.current.push(pageIndex);
+          }
+
+          setTotalCount(fallbackTotal);
+          setCacheVersion((v) => v + 1);
+          setSessionMode(false);
+          applySoftLimitHint(fallbackTotal);
+        } catch (error) {
+          console.error("legacy 搜索失败:", error);
+          setSessionError(typeof error === "string" ? error : String(error));
+        } finally {
+          setIsSearching(false);
         }
-      }
-
-      setResults(uniqueResults);
-      setTotalCount(response.total_count);
-      setCurrentCount(uniqueResults.length);
-    } catch (error) {
-      if (currentSearchRef.current?.cancelled) {
         return;
       }
-      console.error("Failed to search Everything:", error);
-      setResults([]);
-      setTotalCount(null);
-      setCurrentCount(0);
-      
-      const errorStr = typeof error === 'string' ? error : String(error);
-      if (errorStr.includes('NOT_INSTALLED') || 
-          errorStr.includes('SERVICE_NOT_RUNNING')) {
-        const status = await tauriApi.getEverythingStatus();
-        setIsEverythingAvailable(status.available);
-        setEverythingError(status.error || null);
-      }
-    } finally {
-      if (currentSearchRef.current?.query === searchKey && 
-          !currentSearchRef.current?.cancelled) {
+
+      try {
+        const session = await startSessionFn(trimmed, {
+          extensions: extFilter,
+          maxResults: maxResultsToUse,
+          sortKey,
+          sortOrder,
+          matchWholeWord,
+          matchFolderNameOnly,
+        });
+        pendingSessionIdRef.current = session.sessionId;
+        setSessionId(session.sessionId);
+        setTotalCount(Math.min(session.totalCount ?? 0, SAFE_DISPLAY_LIMIT));
+        applySoftLimitHint(session.totalCount ?? 0);
+        // 预取首屏页
+        const pageIndex = 0;
+        const offset = pageIndex * PAGE_SIZE;
+        inflightPagesRef.current.add(pageIndex);
+        getRangeFn(session.sessionId, offset, PAGE_SIZE, {
+          extensions: extFilter,
+          sortKey,
+          sortOrder,
+          matchWholeWord,
+          matchFolderNameOnly,
+        })
+          .then((res) => {
+            if (pendingSessionIdRef.current !== session.sessionId) return;
+            pageCacheRef.current.set(pageIndex, res.items);
+            pageOrderRef.current = [pageIndex];
+            setCacheVersion((v) => v + 1);
+          })
+          .catch((error) => {
+            if (pendingSessionIdRef.current !== session.sessionId) return;
+            console.error("加载首屏页失败:", error);
+            setSessionError(typeof error === "string" ? error : String(error));
+          })
+          .finally(() => {
+            inflightPagesRef.current.delete(pageIndex);
+            if (pendingSessionIdRef.current === session.sessionId) {
+              setIsSearching(false);
+            }
+          });
+      } catch (error) {
+        console.error("开启会话失败:", error);
+        setSessionError(typeof error === "string" ? error : String(error));
+        setSessionMode(false);
         setIsSearching(false);
       }
-    }
-  }, [isEverythingAvailable, activeFilter, matchWholeWord, matchFolderNameOnly, maxResults]);
+    },
+    [
+      activeFilter,
+      applySoftLimitHint,
+      closeSessionSafe,
+      getRangeFn,
+      isEverythingAvailable,
+      matchFolderNameOnly,
+      matchWholeWord,
+      maxResults,
+      resetCaches,
+      sortKey,
+      sortOrder,
+      startSessionFn,
+    ]
+  );
 
-  // 防抖搜索
+  const pruneLRU = useCallback(() => {
+    const order = pageOrderRef.current;
+    while (order.length > MAX_CACHED_PAGES) {
+      const removed = order.shift();
+      if (removed !== undefined) {
+        pageCacheRef.current.delete(removed);
+      }
+    }
+  }, []);
+
+  const touchPageOrder = useCallback((pageIndex: number) => {
+    const order = pageOrderRef.current.filter((p) => p !== pageIndex);
+    order.push(pageIndex);
+    pageOrderRef.current = order;
+  }, []);
+
+  const fetchPage = useCallback(
+    async (pageIndex: number) => {
+      if (!sessionMode) return;
+      if (!sessionId || !getRangeFn) return;
+      if (pageCacheRef.current.has(pageIndex)) {
+        touchPageOrder(pageIndex);
+        return;
+      }
+      if (inflightPagesRef.current.has(pageIndex)) return;
+      inflightPagesRef.current.add(pageIndex);
+      const extFilter =
+        activeFilter && activeFilter.extensions.length > 0 ? activeFilter.extensions : undefined;
+      try {
+        const offset = pageIndex * PAGE_SIZE;
+        const res = await getRangeFn(sessionId, offset, PAGE_SIZE, {
+          extensions: extFilter,
+          sortKey,
+          sortOrder,
+          matchWholeWord,
+          matchFolderNameOnly,
+        });
+        pageCacheRef.current.set(pageIndex, res.items);
+        touchPageOrder(pageIndex);
+        pruneLRU();
+        setCacheVersion((v) => v + 1);
+        if (typeof res.totalCount === "number") {
+          setTotalCount(Math.min(res.totalCount, SAFE_DISPLAY_LIMIT));
+        } else if (res.items.length === 0) {
+          // 后端可能截断或无更多结果，收敛总数避免无限“加载中”
+          const inferredTotal = Math.max(0, pageIndex * PAGE_SIZE);
+          setTotalCount((prev) => {
+            if (prev === null) return inferredTotal;
+            return Math.min(prev, inferredTotal);
+          });
+        }
+      } catch (error) {
+        console.error("加载分页失败:", error);
+        setSessionError(typeof error === "string" ? error : String(error));
+      } finally {
+        inflightPagesRef.current.delete(pageIndex);
+      }
+    },
+    [
+      activeFilter,
+      getRangeFn,
+      matchFolderNameOnly,
+      matchWholeWord,
+      pruneLRU,
+      sessionId,
+      sessionMode,
+      sortKey,
+      sortOrder,
+      touchPageOrder,
+    ]
+  );
+
+  const getItemByIndex = useCallback(
+    (index: number): EverythingResult | null => {
+      if (index < 0) return null;
+      const pageIndex = Math.floor(index / PAGE_SIZE);
+      const indexInPage = index % PAGE_SIZE;
+      const page = pageCacheRef.current.get(pageIndex);
+      if (page && page[indexInPage]) {
+        touchPageOrder(pageIndex);
+        return page[indexInPage];
+      }
+      // 异步请求缺失页
+      fetchPage(pageIndex);
+      return null;
+    },
+    [fetchPage, touchPageOrder]
+  );
+
+  // 防抖触发搜索
   useEffect(() => {
     if (debounceTimeoutRef.current) {
       clearTimeout(debounceTimeoutRef.current);
     }
-
-    const trimmedQuery = query.trim();
-    if (trimmedQuery === "") {
-      setResults([]);
-      setTotalCount(null);
-      setCurrentCount(0);
-      setIsSearching(false);
+    const trimmed = query.trim();
+    if (trimmed === "") {
+      debounceTimeoutRef.current = window.setTimeout(() => {
+        startSearchSession("");
+      }, 150) as unknown as number;
       return;
     }
-
-    debounceTimeoutRef.current = setTimeout(() => {
-      searchEverything(trimmedQuery);
-    }, 300) as unknown as number;
-
+    debounceTimeoutRef.current = window.setTimeout(() => {
+      startSearchSession(trimmed);
+    }, 320) as unknown as number;
     return () => {
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [query, searchEverything]);
+  }, [query, startSearchSession]);
 
-  // 切换过滤器或搜索选项时重新触发 IPC 搜索（保持与当前关键词一致）
+  // 过滤、排序、匹配模式变化时重新搜索（复用会话 API）
   useEffect(() => {
-    const trimmedQuery = query.trim();
-    if (!trimmedQuery) return;
-    // 直接触发一次搜索，复用去重/取消逻辑
-    searchEverything(trimmedQuery);
-  }, [activeFilter, matchWholeWord, matchFolderNameOnly, query, searchEverything]);
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    startSearchSession(trimmed);
+  }, [activeFilter, matchWholeWord, matchFolderNameOnly, sortKey, sortOrder, startSearchSession, query]);
 
-  const filteredAndSortedResults = useMemo(() => {
-    const extSet =
-      activeFilter && activeFilter.extensions.length > 0
-        ? new Set(activeFilter.extensions.map((e) => e.toLowerCase()))
-        : null;
-
-    const filtered = extSet
-      ? results.filter((item) => {
-          const ext = getExtension(item.path);
-          return ext && extSet.has(ext);
-        })
-      : results;
-
-    const sorted = [...filtered].sort((a, b) => {
-      const compare = (x: number | string | null | undefined, y: number | string | null | undefined) => {
-        if (x === undefined || x === null) return 1;
-        if (y === undefined || y === null) return -1;
-        if (typeof x === "string" && typeof y === "string") return x.localeCompare(y);
-        return (x as number) - (y as number);
-      };
-
-      let res = 0;
-      switch (sortKey) {
-        case "name":
-          res = a.name.localeCompare(b.name);
-          break;
-        case "type":
-          res = compare(getExtension(a.path) || "", getExtension(b.path) || "");
-          break;
-        case "size":
-          res = compare(a.size, b.size);
-          break;
-        case "modified":
-        default:
-          res = compare(parseDate(a.date_modified), parseDate(b.date_modified));
-          break;
-      }
-      return sortOrder === "asc" ? res : -res;
-    });
-
-    return sorted;
-  }, [results, activeFilter, sortKey, sortOrder]);
-
+  // 选中项变化时触发预览
   useEffect(() => {
-    setSelectedIndex((prev) => {
-      if (filteredAndSortedResults.length === 0) return 0;
-      return Math.min(prev, filteredAndSortedResults.length - 1);
-    });
-  }, [filteredAndSortedResults]);
-
-  useEffect(() => {
-    if (!filteredAndSortedResults[selectedIndex]) {
+    const target = getItemByIndex(selectedIndex);
+    if (!target) {
       setPreviewData(null);
+      setIsPreviewLoading(false);
       return;
     }
-    const target = filteredAndSortedResults[selectedIndex];
     const requestId = ++previewRequestIdRef.current;
     setIsPreviewLoading(true);
     setPreviewData(null);
-
     tauriApi
       .getFilePreview(target.path)
       .then((res) => {
@@ -515,7 +624,7 @@ export function EverythingSearchWindow() {
           setIsPreviewLoading(false);
         }
       });
-  }, [filteredAndSortedResults, selectedIndex]);
+  }, [getItemByIndex, selectedIndex, cacheVersion]);
 
   const handleChangeSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -628,6 +737,61 @@ export function EverythingSearchWindow() {
     }
   }, []);
 
+  // 虚拟列表尺寸监听
+  useEffect(() => {
+    const node = listContainerRef.current;
+    if (!node) return;
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry && entry.contentRect) {
+        setViewportHeight(entry.contentRect.height);
+      }
+    });
+    resizeObserver.observe(node);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  // 离开页面或窗口关闭时释放会话
+  useEffect(() => {
+    return () => {
+      closeSessionSafe();
+    };
+  }, [closeSessionSafe]);
+
+  const displayCount = useMemo(() => {
+    if (!totalCount) return 0;
+    const maxDisplayable = Math.min(maxResults || ABS_MAX_RESULTS, SAFE_DISPLAY_LIMIT);
+    return Math.min(totalCount, maxDisplayable);
+  }, [maxResults, totalCount]);
+
+  const visibleRange = useMemo(() => {
+    const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
+    const visibleRows = Math.ceil(viewportHeight / ITEM_HEIGHT) + OVERSCAN * 2;
+    const end = Math.min(displayCount - 1, start + visibleRows);
+    return { start, end };
+  }, [displayCount, scrollTop, viewportHeight]);
+
+  const visibleItems = useMemo(() => {
+    const items: { index: number; item: EverythingResult | null }[] = [];
+    if (displayCount === 0) return items;
+    for (let i = visibleRange.start; i <= visibleRange.end; i += 1) {
+      items.push({ index: i, item: getItemByIndex(i) });
+    }
+    return items;
+  }, [displayCount, getItemByIndex, visibleRange.end, visibleRange.start]);
+
+  const paddingTop = visibleRange.start * ITEM_HEIGHT;
+  const paddingBottom = Math.max(0, (displayCount - visibleRange.end - 1) * ITEM_HEIGHT);
+
+  const currentSelectedItem = getItemByIndex(selectedIndex);
+  const computedLoadedCount = useMemo(() => {
+    let count = 0;
+    pageCacheRef.current.forEach((v) => {
+      count += v.length;
+    });
+    return Math.min(count, SAFE_DISPLAY_LIMIT);
+  }, [cacheVersion]);
+
   // 键盘导航
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -638,15 +802,19 @@ export function EverythingSearchWindow() {
 
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setSelectedIndex(prev => 
-          prev < filteredAndSortedResults.length - 1 ? prev + 1 : prev
-        );
+        setSelectedIndex((prev) => {
+          const limit = displayCount > 0 ? displayCount - 1 : 0;
+          return prev < limit ? prev + 1 : prev;
+        });
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setSelectedIndex(prev => prev > 0 ? prev - 1 : 0);
-      } else if (e.key === "Enter" && filteredAndSortedResults[selectedIndex]) {
+        setSelectedIndex((prev) => (prev > 0 ? prev - 1 : 0));
+      } else if (e.key === "Enter") {
         e.preventDefault();
-        handleLaunch(filteredAndSortedResults[selectedIndex]);
+        const target = getItemByIndex(selectedIndex);
+        if (target) {
+          handleLaunch(target);
+        }
       }
     };
 
@@ -654,12 +822,12 @@ export function EverythingSearchWindow() {
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [filteredAndSortedResults, selectedIndex, handleLaunch, handleClose]);
+  }, [displayCount, getItemByIndex, handleClose, handleLaunch, selectedIndex]);
 
-  // 当结果变化时重置选中索引
+  // 当搜索重新开始时复位选中索引
   useEffect(() => {
     setSelectedIndex(0);
-  }, [results]);
+  }, [query, cacheVersion]);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-gray-50">
@@ -707,11 +875,34 @@ export function EverythingSearchWindow() {
           </div>
         </div>
         <div className="text-sm text-gray-500 flex flex-wrap items-center gap-3">
-          {isSearching && <span>搜索中...</span>}
+          {isSearching && (
+            <div className="flex flex-col gap-1 text-blue-600">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                <span>
+                  {totalCount ? `搜索中... ${computedLoadedCount}/${totalCount}` : "搜索中..."}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 h-1 rounded">
+                <div
+                  className="h-1 bg-blue-500 rounded transition-all"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      totalCount ? (computedLoadedCount / Math.max(totalCount, 1)) * 100 : 20
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
           {totalCount !== null && (
             <span>
-              找到 {currentCount} / {totalCount} 个结果，当前显示 {filteredAndSortedResults.length} 条
+              找到 {computedLoadedCount} / {totalCount} 个结果，当前展示上限 {displayCount} 条
             </span>
+          )}
+          {sessionError && (
+            <span className="text-red-600">会话错误：{sessionError}</span>
           )}
           <button
             onClick={() => setShowSyntaxHelp(!showSyntaxHelp)}
@@ -795,7 +986,7 @@ export function EverythingSearchWindow() {
             }}
             className="w-24 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <span className="text-xs text-gray-500">条（最小值：1）</span>
+          <span className="text-xs text-gray-500">条（最小值：1，最多自动截断至 {ABS_MAX_RESULTS}）</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -882,75 +1073,92 @@ export function EverythingSearchWindow() {
       {/* Body */}
       <div className="flex-1 flex min-h-0">
         {/* Results List */}
-        <div className="flex-1 overflow-y-auto">
-          {filteredAndSortedResults.length === 0 && !isSearching && query.trim() !== "" && (
+        <div
+          className="flex-1 overflow-y-auto relative"
+          ref={listContainerRef}
+          onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
+        >
+          {displayCount === 0 && !isSearching && query.trim() !== "" && (
             <div className="p-8 text-center text-gray-500">未找到结果</div>
           )}
-          {filteredAndSortedResults.length === 0 && query.trim() === "" && (
+          {displayCount === 0 && query.trim() === "" && (
             <div className="p-8 text-center text-gray-500">输入关键词开始搜索</div>
           )}
-          {filteredAndSortedResults.map((result, index) => {
-            const ext = getExtension(result.path);
-            return (
-              <div
-                key={result.path}
-                onClick={() => setSelectedIndex(index)}
-                onDoubleClick={() => handleLaunch(result)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  // 可以添加右键菜单
-                }}
-                className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
-                  index === selectedIndex ? "bg-blue-50" : ""
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-gray-900 truncate">{result.name}</div>
-                    <div className="text-sm text-gray-500 truncate mt-1">{result.path}</div>
-                    <div className="text-xs text-gray-400 mt-1 flex flex-wrap gap-3">
-                      <span>类型：{ext || "未知"}</span>
-                      <span>修改：{formatDate(result.date_modified)}</span>
-                      {typeof result.size === "number" && <span>大小：{formatFileSize(result.size)}</span>}
+          {softLimitWarning && (
+            <div className="p-3 bg-yellow-50 border-b border-yellow-200 text-xs text-yellow-800">
+              {softLimitWarning}
+            </div>
+          )}
+          <div style={{ paddingTop, paddingBottom }}>
+            {visibleItems.map(({ index, item }) => {
+              const ext = item ? getExtension(item.name) : null;
+              const isSelected = index === selectedIndex;
+              return (
+                <div
+                  key={item ? item.path : `placeholder-${index}`}
+                  onClick={() => setSelectedIndex(index)}
+                  onDoubleClick={() => item && handleLaunch(item)}
+                  className={`p-3 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
+                    isSelected ? "bg-blue-50" : ""
+                  }`}
+                  style={{ minHeight: ITEM_HEIGHT }}
+                >
+                  {!item && (
+                    <div className="text-sm text-gray-400">加载中... #{index + 1}</div>
+                  )}
+                  {item && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400 w-10 shrink-0 text-right">
+                            #{index + 1}
+                          </span>
+                          <div className="font-medium text-gray-900 truncate">{item.name}</div>
+                        </div>
+                        <div className="text-sm text-gray-500 truncate mt-1">{item.path}</div>
+                        <div className="text-xs text-gray-400 mt-1 flex flex-wrap gap-3">
+                          <span>类型：{ext || "未知"}</span>
+                          <span>修改：{formatDate(item.date_modified)}</span>
+                          {typeof item.size === "number" && (
+                            <span>大小：{formatFileSize(item.size)}</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (item) handleRevealInFolder(item);
+                        }}
+                        className="ml-2 px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded"
+                      >
+                        在文件夹中显示
+                      </button>
                     </div>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRevealInFolder(result);
-                    }}
-                    className="ml-2 px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded"
-                  >
-                    在文件夹中显示
-                  </button>
+                  )}
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
 
         {/* Preview Panel */}
         <div className="w-96 border-l border-gray-200 bg-white p-4 overflow-y-auto">
           <div className="text-base font-semibold text-gray-800 mb-2">快速预览</div>
-          {!filteredAndSortedResults[selectedIndex] && (
-            <div className="text-sm text-gray-500">选择结果查看预览</div>
-          )}
-          {filteredAndSortedResults[selectedIndex] && (
+          {!currentSelectedItem && <div className="text-sm text-gray-500">选择结果查看预览</div>}
+          {currentSelectedItem && (
             <div className="space-y-3">
               <div>
                 <div className="text-sm text-gray-900 font-medium truncate">
-                  {filteredAndSortedResults[selectedIndex].name}
+                  {currentSelectedItem.name}
                 </div>
-                <div className="text-xs text-gray-500 truncate">
-                  {filteredAndSortedResults[selectedIndex].path}
-                </div>
+                <div className="text-xs text-gray-500 truncate">{currentSelectedItem.path}</div>
               </div>
               <div className="text-xs text-gray-500 flex flex-wrap gap-3">
-                {typeof filteredAndSortedResults[selectedIndex].size === "number" && (
-                  <span>大小：{formatFileSize(filteredAndSortedResults[selectedIndex].size!)}</span>
+                {typeof currentSelectedItem.size === "number" && (
+                  <span>大小：{formatFileSize(currentSelectedItem.size!)}</span>
                 )}
-                <span>修改：{formatDate(filteredAndSortedResults[selectedIndex].date_modified)}</span>
-                <span>类型：{getExtension(filteredAndSortedResults[selectedIndex].path) || "未知"}</span>
+                <span>修改：{formatDate(currentSelectedItem.date_modified)}</span>
+                <span>类型：{getExtension(currentSelectedItem.path) || "未知"}</span>
               </div>
 
               {isPreviewLoading && <div className="text-sm text-gray-500">加载预览...</div>}
@@ -1010,10 +1218,18 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function getExtension(path: string): string | null {
-  const last = path.split(".").pop();
-  if (!last || last.includes("/") || last.includes("\\")) return null;
-  return last.toLowerCase();
+function getExtension(pathOrName: string): string | null {
+  // 找到最后一个点的位置
+  const lastDotIndex = pathOrName.lastIndexOf(".");
+  // 如果没找到点，或者点是第一个字符（隐藏文件如 .gitignore），返回 null
+  if (lastDotIndex === -1 || lastDotIndex === 0) return null;
+  // 提取点后面的部分
+  const ext = pathOrName.substring(lastDotIndex + 1);
+  // 如果扩展名包含路径分隔符，说明这不是扩展名
+  if (ext.includes("/") || ext.includes("\\")) return null;
+  // 如果扩展名为空，返回 null
+  if (ext.length === 0) return null;
+  return ext.toLowerCase();
 }
 
 function parseDate(dateStr?: string): number | null {
@@ -1035,4 +1251,5 @@ function formatDate(dateStr?: string): string {
     .toString()
     .padStart(2, "0")}`;
 }
+
 
