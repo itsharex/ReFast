@@ -1527,6 +1527,31 @@ pub async fn search_everything(
     }
 }
 
+/// 取消当前的 Everything 搜索任务（在前端清空查询时调用）
+#[tauri::command]
+pub fn cancel_everything_search() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut manager = SEARCH_TASK_MANAGER
+            .lock()
+            .map_err(|e| format!("锁定搜索管理器失败: {}", e))?;
+
+        if let Some(flag) = &manager.cancel_flag {
+            flag.store(true, Ordering::Relaxed);
+        }
+
+        // 清理当前查询，允许后续相同 query 被重新触发
+        manager.current_query = None;
+        manager.cancel_flag = None;
+
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Everything search is only available on Windows".to_string())
+    }
+}
+
 #[tauri::command]
 pub fn is_everything_available() -> bool {
     #[cfg(target_os = "windows")]

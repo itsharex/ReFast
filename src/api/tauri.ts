@@ -138,6 +138,10 @@ export const tauriApi = {
     return invoke("search_everything", { query, options });
   },
 
+  async cancelEverythingSearch(): Promise<void> {
+    return invoke("cancel_everything_search");
+  },
+
   async isEverythingAvailable(): Promise<boolean> {
     return invoke("is_everything_available");
   },

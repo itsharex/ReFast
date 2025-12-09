@@ -154,7 +154,7 @@ pub mod windows {
     static WINDOW_SENDERS: OnceLock<
         Arc<
             Mutex<
-                HashMap<HWND, mpsc::Sender<Result<(Vec<String>, u32, u32, u32), EverythingError>>>,
+                HashMap<HWND, mpsc::Sender<Result<(Vec<(String, u32)>, u32, u32, u32), EverythingError>>>,
             >,
         >,
     > = OnceLock::new();
@@ -296,7 +296,7 @@ pub mod windows {
     }
 
     fn get_window_senders() -> &'static Arc<
-        Mutex<HashMap<HWND, mpsc::Sender<Result<(Vec<String>, u32, u32, u32), EverythingError>>>>,
+        Mutex<HashMap<HWND, mpsc::Sender<Result<(Vec<(String, u32)>, u32, u32, u32), EverythingError>>>>,
     > {
         WINDOW_SENDERS.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
     }
@@ -349,13 +349,13 @@ pub mod windows {
                     || cds.dwData == 0x804E; // 兼容新协议可能的回复值
 
                 if is_reply {
-                    // 解析结果（现在返回四元组：结果列表, 总条数, 当前页条数, 当前页偏移量）
+                    // 解析结果（现在返回四元组：结果列表(路径, flags), 总条数, 当前页条数, 当前页偏移量）
                     let result = parse_ipc_reply(&cds);
                     match &result {
-                        Ok((paths, tot, num, _off)) => {
+                        Ok((paths_with_flags, tot, num, _off)) => {
                             // 只在批次数量很大或出错时输出详细日志，减少日志噪音
-                            if *tot > 100_000 || paths.len() != *num as usize {
-                                log_debug!("[DEBUG] Parsed result: {} paths (Total: {}, This batch: {})", paths.len(), tot, num);
+                            if *tot > 100_000 || paths_with_flags.len() != *num as usize {
+                                log_debug!("[DEBUG] Parsed result: {} paths (Total: {}, This batch: {})", paths_with_flags.len(), tot, num);
                             }
                         }
                         Err(e) => {
@@ -401,7 +401,7 @@ pub mod windows {
     /// Everything IPC 查询句柄，用于管理消息循环和结果接收
     struct EverythingIpcHandle {
         reply_hwnd: HWND,
-        result_receiver: mpsc::Receiver<Result<(Vec<String>, u32, u32, u32), EverythingError>>,
+        result_receiver: mpsc::Receiver<Result<(Vec<(String, u32)>, u32, u32, u32), EverythingError>>,
     }
 
     impl EverythingIpcHandle {
@@ -580,10 +580,10 @@ pub mod windows {
     }
 
     /// 解析 Everything IPC 回复（官方协议）
-    /// 返回 (结果列表, 总条数, 当前页条数, 当前页偏移量)
+    /// 返回 (结果列表(路径, flags), 总条数, 当前页条数, 当前页偏移量)
     fn parse_ipc_reply(
         cds: &COPYDATASTRUCT,
-    ) -> Result<(Vec<String>, u32, u32, u32), EverythingError> {
+    ) -> Result<(Vec<(String, u32)>, u32, u32, u32), EverythingError> {
         // 验证结构体大小（根据官方头文件，应该是 28 字节）
         let expected_list_size = 28u32; // 7 * DWORD = 28 字节
         let actual_list_size = std::mem::size_of::<EverythingIpcList>() as u32;
@@ -642,7 +642,7 @@ pub mod windows {
 
             // 如果 totitems 和 numitems 为 0，直接返回空结果
             if numitems == 0 {
-                return Ok((Vec::new(), totitems, 0, offset));
+                return Ok((Vec::<(String, u32)>::new(), totitems, 0, offset));
             }
 
             // 处理所有返回的 item（不再限制）
@@ -673,7 +673,7 @@ pub mod windows {
             // 使用宏定义：EVERYTHING_IPC_ITEMFILENAMEW(list,item) = (WCHAR *)((CHAR *)(list) + item->filename_offset)
             // 使用宏定义：EVERYTHING_IPC_ITEMPATHW(list,item) = (WCHAR *)((CHAR *)(list) + item->path_offset)
 
-            let mut results = Vec::new();
+            let mut results: Vec<(String, u32)> = Vec::new();
             let mut skipped_count = 0;
             let mut invalid_offset_count = 0;
 
@@ -809,8 +809,8 @@ pub mod windows {
 
                 // 只有当文件名或路径至少有一个有效时才添加结果
                 if !filename.is_empty() || !path_part.is_empty() {
-                    // 只在出错时输出详细日志
-                    results.push(full_path);
+                    // 返回路径和 flags 的元组
+                    results.push((full_path, flags));
                 } else {
                     skipped_count += 1;
                     // 性能优化：减少日志输出
@@ -1244,8 +1244,9 @@ pub mod windows {
         // 等待回复
         let start = Instant::now();
         let mut iteration = 0;
-        let mut batch_result: Option<Result<(Vec<String>, u32, u32, u32), EverythingError>> =
-            None;
+        let mut batch_result: Option<
+            Result<(Vec<(String, u32)>, u32, u32, u32), EverythingError>,
+        > = None;
 
         loop {
             // 检查是否被取消（在循环开始时立即检查）
@@ -1298,8 +1299,8 @@ pub mod windows {
         }
 
         // 处理结果
-        let (batch_paths, tot_items, num_items, _reply_offset) = match batch_result {
-            Some(Ok((paths, tot, num, off))) => (paths, tot, num, off),
+        let (batch_paths_with_flags, tot_items, num_items, _reply_offset) = match batch_result {
+            Some(Ok((paths_with_flags, tot, num, off))) => (paths_with_flags, tot, num, off),
             Some(Err(e)) => {
                 log_debug!("[DEBUG] ERROR: Received error: {:?}", e);
                 return Err(e);
@@ -1312,7 +1313,7 @@ pub mod windows {
 
         // 转换路径为 EverythingResult，限制为 max_results 条
         let mut all_results = Vec::new();
-        for path in batch_paths.iter().take(max_results) {
+        for (path, flags) in batch_paths_with_flags.iter().take(max_results) {
             let path_buf = PathBuf::from(path);
             let name = path_buf
                 .file_name()
@@ -1323,9 +1324,16 @@ pub mod windows {
             // 性能优化：不查询文件元数据
             let size = None;
             let date_modified = None;
-            let is_folder = match path_buf.extension() {
-                Some(_) => Some(false),
-                None => Some(true),
+            // 使用 Everything 返回的 flags 来判断是否是文件夹
+            // EVERYTHING_IPC_FOLDER (0x00000001) 表示文件夹
+            // EVERYTHING_IPC_DRIVE (0x00000002) 表示驱动器
+            // EVERYTHING_IPC_ROOT (0x00000004) 表示根目录
+            let is_folder = if (flags & EVERYTHING_IPC_FOLDER) != 0 
+                || (flags & EVERYTHING_IPC_DRIVE) != 0 
+                || (flags & EVERYTHING_IPC_ROOT) != 0 {
+                Some(true)
+            } else {
+                Some(false)
             };
 
             let result = EverythingResult {
