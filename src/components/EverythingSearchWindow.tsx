@@ -21,6 +21,7 @@ const FILTER_PREFERENCE_KEY = "everything_filter_pref";
 const CUSTOM_FILTER_PREFERENCE_KEY = "everything_custom_filters";
 const MAX_RESULTS_PREFERENCE_KEY = "everything_max_results_pref";
 const MATCH_WHOLE_WORD_PREFERENCE_KEY = "everything_match_whole_word";
+const MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY = "everything_match_folder_name_only";
 const DEFAULT_MAX_RESULTS = 500;
 
 const QUICK_FILTERS: FilterItem[] = [
@@ -90,6 +91,7 @@ export function EverythingSearchWindow() {
   const [previewData, setPreviewData] = useState<FilePreview | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [matchWholeWord, setMatchWholeWord] = useState(false);
+  const [matchFolderNameOnly, setMatchFolderNameOnly] = useState(false);
   const [maxResults, setMaxResults] = useState<number>(DEFAULT_MAX_RESULTS);
   
   const currentSearchRef = useRef<{ query: string; cancelled: boolean } | null>(null);
@@ -135,6 +137,11 @@ export function EverythingSearchWindow() {
       if (savedMatchWholeWord !== null) {
         setMatchWholeWord(savedMatchWholeWord === "true");
       }
+
+      const savedMatchFolderNameOnly = localStorage.getItem(MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY);
+      if (savedMatchFolderNameOnly !== null) {
+        setMatchFolderNameOnly(savedMatchFolderNameOnly === "true");
+      }
     } catch (error) {
       console.warn("加载 Everything 偏好失败", error);
     }
@@ -175,6 +182,22 @@ export function EverythingSearchWindow() {
       // ignore
     }
   }, [matchWholeWord]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY, matchFolderNameOnly.toString());
+    } catch {
+      // ignore
+    }
+  }, [matchFolderNameOnly]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MATCH_FOLDER_NAME_ONLY_PREFERENCE_KEY, matchFolderNameOnly.toString());
+    } catch {
+      // ignore
+    }
+  }, [matchFolderNameOnly]);
 
   useEffect(() => {
     try {
@@ -288,6 +311,7 @@ export function EverythingSearchWindow() {
         extensions: extFilter,
         maxResults: maxResults,
         matchWholeWord: matchWholeWord,
+        matchFolderNameOnly: matchFolderNameOnly,
       });
       
       if (currentSearchRef.current?.cancelled || 
@@ -330,7 +354,7 @@ export function EverythingSearchWindow() {
         setIsSearching(false);
       }
     }
-  }, [isEverythingAvailable, activeFilter, matchWholeWord, maxResults]);
+  }, [isEverythingAvailable, activeFilter, matchWholeWord, matchFolderNameOnly, maxResults]);
 
   // 防抖搜索
   useEffect(() => {
@@ -561,15 +585,26 @@ export function EverythingSearchWindow() {
             className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             autoFocus
           />
-          <label className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg border border-gray-200 whitespace-nowrap">
-            <input
-              type="checkbox"
-              checked={matchWholeWord}
-              onChange={(e) => setMatchWholeWord(e.target.checked)}
-              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-            />
-            <span>全字匹配</span>
-          </label>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg border border-gray-200 whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={matchWholeWord}
+                onChange={(e) => setMatchWholeWord(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span>全字匹配</span>
+            </label>
+            <label className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg border border-gray-200 whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={matchFolderNameOnly}
+                onChange={(e) => setMatchFolderNameOnly(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span>仅文件夹名</span>
+            </label>
+          </div>
         </div>
         <div className="text-sm text-gray-500 flex flex-wrap items-center gap-3">
           {isSearching && <span>搜索中...</span>}
@@ -695,8 +730,8 @@ export function EverythingSearchWindow() {
             return (
               <div
                 key={result.path}
-                onClick={() => handleLaunch(result)}
-                onMouseEnter={() => setSelectedIndex(index)}
+                onClick={() => setSelectedIndex(index)}
+                onDoubleClick={() => handleLaunch(result)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   // 可以添加右键菜单
