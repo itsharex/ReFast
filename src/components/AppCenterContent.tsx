@@ -1078,19 +1078,24 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     };
   }, []);
 
+  // 所有可用插件（排除 show_plugin_list，因为它就是用来显示插件列表的，不应该出现在列表里）
+  const availablePlugins = useMemo(() => {
+    return plugins.filter(plugin => plugin.id !== 'show_plugin_list');
+  }, [plugins]);
+
   // 过滤插件
   const filteredPlugins = useMemo(() => {
     if (!searchQuery.trim()) {
-      return plugins;
+      return availablePlugins;
     }
     const query = searchQuery.toLowerCase();
-    return plugins.filter(
+    return availablePlugins.filter(
       (plugin) =>
         plugin.name.toLowerCase().includes(query) ||
         plugin.description?.toLowerCase().includes(query) ||
         plugin.keywords.some((keyword) => keyword.toLowerCase().includes(query))
     );
-  }, [searchQuery]);
+  }, [searchQuery, availablePlugins]);
 
   // 根据插件ID获取对应的图标
   const getPluginIcon = (pluginId: string) => {
@@ -1321,7 +1326,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
             {/* 插件统计信息 - 显示在列表底部 */}
             <div className="mt-6 pt-6 border-t border-gray-200 flex items-center justify-center gap-4 text-sm">
               <div className="text-gray-600">
-                共 <span className="font-medium text-green-600">{plugins.length}</span> 个插件
+                共 <span className="font-medium text-green-600">{availablePlugins.length}</span> 个插件
                 {searchQuery && (
                   <span className="ml-1 text-gray-500">
                     （找到 <span className="font-medium text-green-600">{filteredPlugins.length}</span> 个）
