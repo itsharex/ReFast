@@ -4390,10 +4390,10 @@ export function LauncherWindow() {
                                       ? "bg-gradient-to-br from-[#f0f5fb] to-[#e5edf9] border-2 border-[#a8c0e0] shadow-[0_4px_12px_rgba(20,32,50,0.12)] scale-[1.2]"
                                       : "bg-indigo-50 border-2 border-indigo-400 shadow-md shadow-indigo-200/50 scale-[1.2]"
                                     : "bg-white hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:shadow-md"
-                                }`}
+                                } ${isLaunching ? 'rocket-launching' : ''}`}
                                 style={{
                                   animation: isLaunching 
-                                    ? `launchApp 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards` 
+                                    ? `launchApp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards` 
                                     : `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
                                   marginLeft: execIndex === 0 && isSelected ? '10px' : '0px', // 第一个item选中时添加左边距，防止放大后被裁剪
                                   width: '80px',
@@ -4479,10 +4479,10 @@ export function LauncherWindow() {
                     e.stopPropagation();
                   }}
                   onContextMenu={(e) => handleContextMenu(e, result)}
-                  className={theme.card(isSelected)}
+                  className={`${theme.card(isSelected)} ${isLaunching ? 'rocket-launching' : ''}`}
                   style={{
                     animation: isLaunching 
-                      ? `launchApp 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards` 
+                      ? `launchApp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards` 
                       : `fadeInUp 0.18s ease-out ${index * 0.02}s both`,
                   }}
                 >
