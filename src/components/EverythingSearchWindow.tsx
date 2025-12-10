@@ -117,6 +117,16 @@ export function EverythingSearchWindow() {
   const currentSearchQueryRef = useRef<string>("");
   const startSearchSessionRef = useRef<typeof startSearchSession | null>(null);
   const creatingSessionQueryRef = useRef<string | null>(null); // 正在创建的会话的查询
+  // 保存当前活跃会话的搜索参数，用于判断是否需要重新创建会话
+  const activeSessionParamsRef = useRef<{
+    query: string;
+    extensions?: string[];
+    maxResults: number;
+    sortKey: SortKey;
+    sortOrder: SortOrder;
+    matchWholeWord: boolean;
+    matchFolderNameOnly: boolean;
+  } | null>(null);
 
   const activeFilter = useMemo<FilterItem | undefined>(() => {
     const builtIn = QUICK_FILTERS.find((f) => f.id === activeFilterId);
@@ -350,6 +360,7 @@ export function EverythingSearchWindow() {
         }
         console.log("[pendingSessionIdRef] 设置为 null - 原因: 查询为空", { oldSessionId, searchQuery });
         pendingSessionIdRef.current = null;
+        activeSessionParamsRef.current = null;
         resetCaches();
         setSessionId(null);
         setSessionMode(false);
@@ -364,6 +375,7 @@ export function EverythingSearchWindow() {
         }
         console.log("[pendingSessionIdRef] 设置为 null - 原因: Everything不可用", { oldSessionId, isEverythingAvailable });
         pendingSessionIdRef.current = null;
+        activeSessionParamsRef.current = null;
         setSessionMode(false);
         setSessionId(null);
         setTotalCount(null);
@@ -384,12 +396,35 @@ export function EverythingSearchWindow() {
         console.log("相同查询的会话正在创建中，等待完成");
         return;
       }
+      
+      // 检查是否已有相同参数的活跃会话（不仅检查查询，还要检查所有搜索参数）
+      const currentParams = {
+        query: trimmed,
+        extensions: extFilter,
+        maxResults: maxResultsToUse,
+        sortKey,
+        sortOrder,
+        matchWholeWord,
+        matchFolderNameOnly,
+      };
+      
       if (
         pendingSessionIdRef.current &&
         sessionMode &&
-        currentSearchQueryRef.current === trimmed
+        activeSessionParamsRef.current &&
+        // 比较所有参数是否相同
+        activeSessionParamsRef.current.query === currentParams.query &&
+        JSON.stringify(activeSessionParamsRef.current.extensions || []) === JSON.stringify(currentParams.extensions || []) &&
+        activeSessionParamsRef.current.maxResults === currentParams.maxResults &&
+        activeSessionParamsRef.current.sortKey === currentParams.sortKey &&
+        activeSessionParamsRef.current.sortOrder === currentParams.sortOrder &&
+        activeSessionParamsRef.current.matchWholeWord === currentParams.matchWholeWord &&
+        activeSessionParamsRef.current.matchFolderNameOnly === currentParams.matchFolderNameOnly
       ) {
-        console.log("相同查询已有活跃会话，等待完成");
+        console.log("相同参数已有活跃会话，等待完成", { 
+          sessionId: pendingSessionIdRef.current,
+          params: currentParams 
+        });
         return;
       }
 
@@ -404,6 +439,7 @@ export function EverythingSearchWindow() {
       // 在创建新会话前先清空 pendingSessionIdRef，防止旧的 fetchPage 使用已失效的会话
       console.log("[pendingSessionIdRef] 设置为 null - 原因: 创建新会话前清空旧会话", { oldSessionId, newQuery: trimmed, currentQuery: currentSearchQueryRef.current });
       pendingSessionIdRef.current = null;
+      activeSessionParamsRef.current = null;
       resetCaches();
       scrollToTop();
       console.log("[currentLoadedCount] 重置为 0，开始新搜索，查询:", trimmed);
@@ -442,6 +478,7 @@ export function EverythingSearchWindow() {
           await closeSessionSafe(session.sessionId);
           console.log("[pendingSessionIdRef] 设置为 null - 原因: 查询已切换，忽略旧会话", { sessionId: session.sessionId, oldQuery: trimmed, newQuery: currentSearchQueryRef.current });
           pendingSessionIdRef.current = null;
+          activeSessionParamsRef.current = null;
           creatingSessionQueryRef.current = null; // 清除创建标记
           setIsSearching(false);
           return;
@@ -450,6 +487,8 @@ export function EverythingSearchWindow() {
         console.log("[pendingSessionIdRef] 设置为会话ID - 原因: 会话创建成功", { sessionId: session.sessionId, query: trimmed, totalCount: session.totalCount });
         pendingSessionIdRef.current = session.sessionId;
         creatingSessionQueryRef.current = null; // 会话创建成功，清除创建标记
+        // 保存当前会话的参数，用于后续判断是否需要重新创建
+        activeSessionParamsRef.current = currentParams;
         setSessionId(session.sessionId);
         setTotalCount(Math.min(session.totalCount ?? 0, SAFE_DISPLAY_LIMIT));
         applySoftLimitHint(session.totalCount ?? 0);
@@ -566,6 +605,7 @@ export function EverythingSearchWindow() {
         setSessionError(errorStr);
         console.log("[pendingSessionIdRef] 设置为 null - 原因: 会话创建失败", { error: errorStr, query: trimmed });
         pendingSessionIdRef.current = null;
+        activeSessionParamsRef.current = null;
         setSessionMode(false);
         setIsSearching(false);
       }
@@ -723,6 +763,76 @@ export function EverythingSearchWindow() {
       }
     };
   }, [query]); // 只依赖 query，不依赖 startSearchSession，避免函数重新创建时重复触发
+
+  // 当过滤器、排序、全字匹配等参数变化时，如果有查询，重新触发搜索
+  // 使用 useRef 保存上一次的参数值，避免 query 变化时重复触发
+  const prevParamsRef = useRef<{
+    activeFilterId: string;
+    sortKey: SortKey;
+    sortOrder: SortOrder;
+    matchWholeWord: boolean;
+    matchFolderNameOnly: boolean;
+    maxResults: number;
+    query: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    const currentParams = {
+      activeFilterId,
+      sortKey,
+      sortOrder,
+      matchWholeWord,
+      matchFolderNameOnly,
+      maxResults,
+      query: trimmed,
+    };
+
+    // 如果查询为空，重置参数引用
+    if (trimmed === "") {
+      prevParamsRef.current = null;
+      return;
+    }
+
+    // 如果是第一次设置参数，只保存参数，不触发搜索（query 变化时由上面的 useEffect 处理）
+    if (prevParamsRef.current === null) {
+      prevParamsRef.current = currentParams;
+      return;
+    }
+
+    // 如果只是 query 变化，更新参数引用但不触发搜索（由上面的 useEffect 处理）
+    if (prevParamsRef.current.query !== trimmed) {
+      prevParamsRef.current = currentParams;
+      return;
+    }
+
+    // 检查参数是否真的变化了（query 相同的情况下）
+    const paramsChanged =
+      prevParamsRef.current.activeFilterId !== currentParams.activeFilterId ||
+      prevParamsRef.current.sortKey !== currentParams.sortKey ||
+      prevParamsRef.current.sortOrder !== currentParams.sortOrder ||
+      prevParamsRef.current.matchWholeWord !== currentParams.matchWholeWord ||
+      prevParamsRef.current.matchFolderNameOnly !== currentParams.matchFolderNameOnly ||
+      prevParamsRef.current.maxResults !== currentParams.maxResults;
+
+    if (!paramsChanged) {
+      return;
+    }
+
+    // 参数变化时重新搜索（query 相同，但其他参数变化）
+    prevParamsRef.current = currentParams;
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+    debounceTimeoutRef.current = window.setTimeout(() => {
+      startSearchSessionRef.current?.(trimmed);
+    }, 150) as unknown as number; // 参数变化时使用较短的防抖时间，响应更快
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+    };
+  }, [activeFilterId, sortKey, sortOrder, matchWholeWord, matchFolderNameOnly, maxResults, query]); // 监听所有影响搜索结果的参数
 
   // 选中项变化时触发预览
   useEffect(() => {
@@ -939,6 +1049,7 @@ export function EverythingSearchWindow() {
       }
       console.log("[pendingSessionIdRef] 设置为 null - 原因: 组件卸载", { oldSessionId });
       pendingSessionIdRef.current = null;
+      activeSessionParamsRef.current = null;
     };
   }, []); // 空依赖数组，只在组件真正卸载时执行
 
