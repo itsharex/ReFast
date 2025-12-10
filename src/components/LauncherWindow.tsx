@@ -579,8 +579,7 @@ export function LauncherWindow() {
             setQuery,
             setSelectedIndex,
             hideLauncher: async () => {
-              const window = await getCurrentWindow();
-              await window.hide();
+              await tauriApi.hideLauncher();
             },
             tauriApi,
           };
@@ -3072,6 +3071,18 @@ export function LauncherWindow() {
       return;
     }
     
+    // 后端存在“相同查询进行中则报错跳过”的保护，这里每次新搜索前主动取消上一轮，避免误判卡死
+    try {
+      await tauriApi.cancelEverythingSearch();
+    } catch (cancelErr) {
+      console.warn("取消上一轮 Everything 搜索失败（忽略继续）:", cancelErr);
+    }
+    // 前端同步清理当前搜索引用，允许同一关键字立即重新发起请求
+    if (currentSearchRef.current) {
+      currentSearchRef.current.cancelled = true;
+      currentSearchRef.current = null;
+    }
+
     // 检查是否是重复调用
     // 注意：防抖结束后已经检查过了，但这里需要再次检查，因为可能有异步调用
     if (currentSearchRef.current) {
