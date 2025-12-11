@@ -1373,6 +1373,20 @@ export function LauncherWindow() {
       return [];
     }
     
+    // 先对 everythingResults 进行去重（基于路径），防止重复触发 useMemo 重新计算
+    const seenEverythingPaths = new Set<string>();
+    const deduplicatedEverythingResults: EverythingResult[] = [];
+    for (const everything of everythingResults) {
+      const normalizedPath = everything.path.toLowerCase().replace(/\\/g, "/");
+      if (!seenEverythingPaths.has(normalizedPath)) {
+        seenEverythingPaths.add(normalizedPath);
+        deduplicatedEverythingResults.push(everything);
+      }
+    }
+    
+    // 使用去重后的 everythingResults
+    const uniqueEverythingResults = deduplicatedEverythingResults;
+    
     const urlResults: SearchResult[] = detectedUrls.map((url) => ({
       type: "url" as const,
       url,
@@ -1447,12 +1461,14 @@ export function LauncherWindow() {
         path: "ms-settings:startupapps",
       }] : []),
       // 如果查询匹配设置关键词，优先显示 Windows 设置应用（通过提高其优先级实现）
-      ...filteredApps.map((app) => ({
-        type: "app" as const,
-        app,
-        displayName: app.name,
-        path: app.path,
-      })),
+      ...filteredApps.map((app) => {
+        return {
+          type: "app" as const,
+          app,
+          displayName: app.name,
+          path: app.path,
+        };
+      }),
       // 从文件历史记录中分离可执行文件
       ...filteredFiles
         .filter((file) => {
@@ -1460,8 +1476,12 @@ export function LauncherWindow() {
           return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
         })
         .filter((file) => {
-          // 检查是否已经在 filteredApps 中，如果已存在则过滤掉
-          return !filteredApps.some(app => app.path === file.path);
+          // 检查是否已经在 filteredApps 中，如果已存在则过滤掉（使用标准化路径比较）
+          const normalizedFilePath = file.path.toLowerCase().replace(/\\/g, "/");
+          return !filteredApps.some(app => {
+            const normalizedAppPath = app.path.toLowerCase().replace(/\\/g, "/");
+            return normalizedAppPath === normalizedFilePath;
+          });
         })
         .map((file): SearchResult => ({
           type: "app" as const,
@@ -1520,20 +1540,36 @@ export function LauncherWindow() {
         path: folder.path,
       })),
       // 从 Everything 结果中分离可执行文件
-      ...everythingResults
+      // 使用已去重的 uniqueEverythingResults
+      ...uniqueEverythingResults
         .filter((everything) => {
           const pathLower = everything.path.toLowerCase();
           return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
         })
         .filter((everything) => {
+          // 过滤掉回收站中的文件（$RECYCLE.BIN）
+          const pathLower = everything.path.toLowerCase();
+          if (pathLower.includes('$recycle.bin')) {
+            return false;
+          }
+          return true;
+        })
+        .filter((everything) => {
           // 检查是否已经在 filteredApps 或 filteredFiles 中，如果已存在则过滤掉
-          return !filteredApps.some(app => app.path === everything.path) &&
-                 !filteredFiles.some(file => file.path === everything.path);
+          const isInFilteredApps = filteredApps.some(app => {
+            const normalizedAppPath = app.path.toLowerCase().replace(/\\/g, "/");
+            const normalizedEverythingPath = everything.path.toLowerCase().replace(/\\/g, "/");
+            return normalizedAppPath === normalizedEverythingPath;
+          });
+          const isInFilteredFiles = filteredFiles.some(file => {
+            const normalizedFilePath = file.path.toLowerCase().replace(/\\/g, "/");
+            const normalizedEverythingPath = everything.path.toLowerCase().replace(/\\/g, "/");
+            return normalizedFilePath === normalizedEverythingPath;
+          });
+          const shouldInclude = !isInFilteredApps && !isInFilteredFiles;
+          return shouldInclude;
         })
         .map((everything): SearchResult => {
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1533',message:'从Everything结果构建app类型结果',data:{name:everything.name,path:everything.path,isInFilteredApps:filteredApps.some(app => app.path === everything.path),isInFilteredFiles:filteredFiles.some(file => file.path === everything.path)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-          // #endregion
           return {
             type: "app" as const,
             app: {
@@ -1549,10 +1585,19 @@ export function LauncherWindow() {
           };
         }),
       // 普通 Everything 结果（非可执行文件）
-      ...everythingResults
+      // 使用已去重的 uniqueEverythingResults
+      ...uniqueEverythingResults
         .filter((everything) => {
           const pathLower = everything.path.toLowerCase();
           return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
+        })
+        .filter((everything) => {
+          // 过滤掉回收站中的文件（$RECYCLE.BIN）
+          const pathLower = everything.path.toLowerCase();
+          if (pathLower.includes('$recycle.bin')) {
+            return false;
+          }
+          return true;
         })
         .map((everything) => ({
           type: "everything" as const,
@@ -1576,6 +1621,7 @@ export function LauncherWindow() {
     // 过滤掉 Everything 结果中与历史文件结果重复的路径
     const deduplicatedResults: SearchResult[] = [];
     const addedHistoryPaths = new Set<string>(); // 用于跟踪已添加的历史文件路径，防止历史文件结果之间的重复
+    const addedAppPaths = new Set<string>(); // 用于跟踪已添加的应用路径，防止应用结果之间的重复
     for (const result of otherResults) {
       // 对于特殊类型（AI、历史、设置等）和 URL，不需要去重
       if (result.type === "ai" || result.type === "history" || result.type === "settings" || result.type === "url" || result.type === "email" || result.type === "json_formatter" || result.type === "plugin") {
@@ -1604,7 +1650,21 @@ export function LauncherWindow() {
         continue;
       }
       
-      // 对于其他类型（app、system_folder 等），检查路径是否重复
+      // 对于 app 类型，检查路径是否重复（包括与其他 app 类型结果的重复）
+      if (result.type === "app") {
+        const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
+        const isInHistoryFilePaths = historyFilePaths.has(normalizedPath);
+        const isInAddedAppPaths = addedAppPaths.has(normalizedPath);
+        // 检查是否已在历史文件结果中，或者是否已经添加过（防止重复）
+        // 注意：如果同一个路径在 otherResults 中出现多次（比如来自 filteredFiles 和 Everything），只保留第一个
+        if (!isInHistoryFilePaths && !isInAddedAppPaths) {
+          addedAppPaths.add(normalizedPath);
+          deduplicatedResults.push(result);
+        }
+        continue;
+      }
+      
+      // 对于其他类型（system_folder 等），检查路径是否重复
       const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
       if (!historyFilePaths.has(normalizedPath)) {
         deduplicatedResults.push(result);

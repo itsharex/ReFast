@@ -139,26 +139,14 @@ export function ResultIcon({
     
     useEffect(() => {
       if (!iconToUse && !extractedIcon && result.path && isExeOrLnk) {
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ResultIcon.tsx:extract',message:'开始动态提取图标',data:{path:result.path},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
         tauriApi.extractIconFromPath(result.path)
           .then((icon) => {
             if (icon) {
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ResultIcon.tsx:extract',message:'图标提取成功',data:{path:result.path,iconLength:icon.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-              // #endregion
               setExtractedIcon(icon);
-            } else {
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ResultIcon.tsx:extract',message:'图标提取失败',data:{path:result.path},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-              // #endregion
             }
           })
-          .catch((err) => {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ResultIcon.tsx:extract',message:'图标提取异常',data:{path:result.path,error:String(err)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-            // #endregion
+          .catch(() => {
+            // 忽略错误，使用默认图标
           });
       }
     }, [iconToUse, extractedIcon, result.path, isExeOrLnk]);
@@ -407,9 +395,6 @@ export function ResultIcon({
     const isLnkOrExe = filePath.toLowerCase().endsWith(".lnk") || filePath.toLowerCase().endsWith(".exe");
     
     if (isLnkOrExe) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ResultIcon.tsx:365',message:'处理文件/Everything的exe/lnk图标',data:{type:result.type,filePath:filePath,filteredAppsSearchResult:filteredApps.find((app) => app.path === filePath)?.icon?'found':'not_found',appsSearchResult:apps.find((app) => app.path === filePath)?.icon?'found':'not_found'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       // 尝试在应用列表中查找匹配的应用（通过路径匹配）
       let matchedApp = filteredApps.find((app) => app.path === filePath);
       if (!matchedApp || !matchedApp.icon) {
