@@ -3,11 +3,12 @@ import type { ThemeConfig, ResultStyle } from "../utils/themeConfig";
 import { isFolderLikePath } from "../utils/launcherUtils";
 
 type SearchResult = {
-  type: "app" | "file" | "everything" | "url" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
+  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
   app?: AppInfo;
   file?: FileHistoryItem;
   everything?: EverythingResult;
   url?: string;
+  email?: string;
   memo?: MemoItem;
   plugin?: { id: string; name: string; description?: string };
   systemFolder?: SystemFolderItem;
@@ -180,6 +181,20 @@ export function ResultIcon({
           strokeLinejoin="round"
           strokeWidth={2}
           d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
+        />
+      </svg>
+    );
+  }
+
+  // 处理邮箱图标
+  if (result.type === "email") {
+    return (
+      <svg className={`w-5 h-5 ${theme.iconColor(isSelected, "text-green-500")}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
         />
       </svg>
     );

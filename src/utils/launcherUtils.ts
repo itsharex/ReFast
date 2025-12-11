@@ -19,6 +19,24 @@ export function extractUrls(text: string): string[] {
     .filter((url, index, self) => self.indexOf(url) === index); // Remove duplicates
 }
 
+// Extract email addresses from text
+export function extractEmails(text: string): string[] {
+  if (!text || text.trim().length === 0) return [];
+  
+  // 匹配邮箱地址的正则表达式
+  // 支持常见格式：user@domain.com, user.name@domain.com, user+tag@domain.co.uk
+  // 排除已包含在 URL 中的邮箱（避免重复）
+  const emailPattern = /\b[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}\b/gi;
+  const matches = text.match(emailPattern);
+  if (!matches) return [];
+  
+  // 清理并返回邮箱地址
+  return matches
+    .map(email => email.trim().toLowerCase())
+    .filter((email): email is string => email.length > 0)
+    .filter((email, index, self) => self.indexOf(email) === index); // Remove duplicates
+}
+
 // Check if text is valid JSON
 export function isValidJson(text: string): boolean {
   if (!text || text.trim().length === 0) return false;

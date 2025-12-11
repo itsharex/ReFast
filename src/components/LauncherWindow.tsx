@@ -17,6 +17,7 @@ import { ResultIcon } from "./ResultIcon";
 import { ErrorDialog } from "./ErrorDialog";
 import {
   extractUrls,
+  extractEmails,
   isValidJson,
   highlightText,
   isLikelyAbsolutePath,
@@ -29,11 +30,12 @@ import { clearAllResults, resetSelectedIndices, selectFirstHorizontal, selectFir
 import { adjustWindowSize, getMainContainer as getMainContainerUtil } from "../utils/windowUtils";
 
 type SearchResult = {
-  type: "app" | "file" | "everything" | "url" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
+  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
   app?: AppInfo;
   file?: FileHistoryItem;
   everything?: EverythingResult;
   url?: string;
+  email?: string;
   memo?: MemoItem;
   plugin?: { id: string; name: string; description?: string };
   systemFolder?: SystemFolderItem;
@@ -78,9 +80,12 @@ export function LauncherWindow() {
     base_url: "http://localhost:11434",
   });
   const [detectedUrls, setDetectedUrls] = useState<string[]>([]);
+  const [detectedEmails, setDetectedEmails] = useState<string[]>([]);
   const [detectedJson, setDetectedJson] = useState<string | null>(null);
   // 错误提示弹窗
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // 成功提示弹窗
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; result: SearchResult } | null>(null);
   const [selectedMemo, setSelectedMemo] = useState<MemoItem | null>(null);
   const [isMemoModalOpen, setIsMemoModalOpen] = useState(false);
@@ -1135,6 +1140,7 @@ export function LauncherWindow() {
       setEverythingTotalCount(null);
       setEverythingCurrentCount(0);
       setDetectedUrls([]);
+      setDetectedEmails([]);
       setDetectedJson(null);
       setAiAnswer(null); // 清空 AI 回答
       setShowAiAnswer(false); // 退出 AI 回答模式
@@ -1154,6 +1160,10 @@ export function LauncherWindow() {
     // Extract URLs from query (同步操作，不需要防抖)
     const urls = extractUrls(query);
     setDetectedUrls(urls);
+    
+    // Extract email addresses from query (同步操作，不需要防抖)
+    const emails = extractEmails(query);
+    setDetectedEmails(emails);
     
     // Check if query is valid JSON (同步操作，不需要防抖)
     if (isValidJson(query)) {
@@ -1360,6 +1370,14 @@ export function LauncherWindow() {
       path: url,
     }));
     
+    // 邮箱结果
+    const emailResults: SearchResult[] = detectedEmails.map((email) => ({
+      type: "email" as const,
+      email,
+      displayName: email,
+      path: `mailto:${email}`,
+    }));
+    
     // JSON 格式化选项
     const jsonFormatterResult: SearchResult[] = detectedJson ? [{
       type: "json_formatter" as const,
@@ -1545,7 +1563,7 @@ export function LauncherWindow() {
     const addedHistoryPaths = new Set<string>(); // 用于跟踪已添加的历史文件路径，防止历史文件结果之间的重复
     for (const result of otherResults) {
       // 对于特殊类型（AI、历史、设置等）和 URL，不需要去重
-      if (result.type === "ai" || result.type === "history" || result.type === "settings" || result.type === "url" || result.type === "json_formatter" || result.type === "plugin") {
+      if (result.type === "ai" || result.type === "history" || result.type === "settings" || result.type === "url" || result.type === "email" || result.type === "json_formatter" || result.type === "plugin") {
         deduplicatedResults.push(result);
         continue;
       }
@@ -1797,16 +1815,16 @@ export function LauncherWindow() {
       (result) => result.type !== "plugin"
     );
     
-    // 如果 JSON 中包含链接，优先显示 JSON 格式化选项，否则按原来的顺序（URLs -> JSON formatter -> other results）
+    // 如果 JSON 中包含链接，优先显示 JSON 格式化选项，否则按原来的顺序（URLs -> Emails -> JSON formatter -> other results）
     // 但所有插件始终在最前面
     if (jsonContainsLinks && jsonFormatterResult.length > 0) {
-      return [...pluginResults, ...jsonFormatterResult, ...urlResults, ...otherResultsWithoutPlugins];
+      return [...pluginResults, ...jsonFormatterResult, ...urlResults, ...emailResults, ...otherResultsWithoutPlugins];
     } else {
-      // URLs always come first, then JSON formatter, then other results sorted by open history
+      // URLs always come first, then emails, then JSON formatter, then other results sorted by open history
       // 但所有插件始终在最前面
-      return [...pluginResults, ...urlResults, ...jsonFormatterResult, ...otherResultsWithoutPlugins];
+      return [...pluginResults, ...urlResults, ...emailResults, ...jsonFormatterResult, ...otherResultsWithoutPlugins];
     }
-  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, systemFolders, everythingResults, detectedUrls, detectedJson, openHistory, query, aiAnswer]);
+  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, systemFolders, everythingResults, detectedUrls, detectedEmails, detectedJson, openHistory, query, aiAnswer]);
 
   // 使用 ref 来跟踪当前的 query，避免闭包问题
   const queryRef = useRef(query);
@@ -3338,6 +3356,21 @@ export function LauncherWindow() {
         // 打开链接后隐藏启动器
         await hideLauncherAndResetState();
         return;
+      } else if (result.type === "email" && result.email) {
+        // 复制邮箱地址到剪贴板
+        try {
+          await navigator.clipboard.writeText(result.email);
+          // 显示成功提示，不隐藏启动器
+          setSuccessMessage(`已复制邮箱地址：${result.email}`);
+          // 3秒后自动关闭提示
+          setTimeout(() => {
+            setSuccessMessage(null);
+          }, 3000);
+        } catch (error) {
+          console.error("Failed to copy email to clipboard:", error);
+          setErrorMessage("复制邮箱地址失败");
+        }
+        return;
       } else if (result.type === "json_formatter" && result.jsonContent) {
         // 打开 JSON 格式化窗口并传递 JSON 内容
         await tauriApi.showJsonFormatterWindow();
@@ -4539,6 +4572,16 @@ export function LauncherWindow() {
                           </span>
                         </div>
                       )}
+                      {result.type === "email" && (
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <span
+                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("email", isSelected)}`}
+                            title="可打开的邮箱地址"
+                          >
+                            邮箱
+                          </span>
+                        </div>
+                      )}
                       {result.type === "json_formatter" && (
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
@@ -4915,6 +4958,17 @@ export function LauncherWindow() {
         message={errorMessage || ""}
         onClose={() => {
           setErrorMessage(null);
+        }}
+      />
+
+      {/* 成功提示弹窗 */}
+      <ErrorDialog
+        isOpen={!!successMessage}
+        type="success"
+        title="操作成功"
+        message={successMessage || ""}
+        onClose={() => {
+          setSuccessMessage(null);
         }}
       />
     </div>

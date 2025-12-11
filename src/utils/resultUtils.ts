@@ -5,11 +5,12 @@
 
 // SearchResult 类型定义（与 LauncherWindow.tsx 中的定义保持一致）
 export type SearchResult = {
-  type: "app" | "file" | "everything" | "url" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
+  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
   app?: any;
   file?: any;
   everything?: any;
   url?: string;
+  email?: string;
   memo?: any;
   plugin?: { id: string; name: string; description?: string };
   systemFolder?: any;
