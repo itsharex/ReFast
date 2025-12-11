@@ -1187,8 +1187,8 @@ pub mod windows {
             EverythingError::ServiceNotRunning
         })?;
 
-        // 每批次的超时（单批短一点，避免整体阻塞）
-        let timeout = Duration::from_secs(5);
+        // 每批次的超时（略放宽，避免大结果集/高负载时过早超时）
+        let timeout = Duration::from_secs(12);
 
         // 归一化参数
         let target_max = max_results.max(1);
@@ -1219,6 +1219,9 @@ pub mod windows {
         let mut offset: usize = 0;
         let mut all_results: Vec<EverythingResult> = Vec::new();
         let mut total_from_everything: Option<u32> = None;
+
+        // 如果部分批次成功但后续等待超时，我们会带着已获取的结果提前返回
+        let mut timeout_with_partial = false;
 
         while offset < target_max {
             // 取消检查
@@ -1258,11 +1261,12 @@ pub mod windows {
             })?;
 
             // 等待回复
+            // 性能优化：使用自适应休眠时间减少CPU占用，同时保持响应性
             let start = Instant::now();
-            let mut iteration = 0;
             let mut batch_result: Option<
                 Result<(Vec<(String, u32)>, u32, u32, u32), EverythingError>,
             > = None;
+            let mut consecutive_empty_count = 0u32; // 连续空轮询计数
 
             loop {
                 // 取消检查
@@ -1273,31 +1277,60 @@ pub mod windows {
                     }
                 }
 
-                iteration += 1;
-                if iteration % 20 == 0 {
+                // 检查超时
+                if start.elapsed() > timeout {
                     log_debug!(
-                        "[DEBUG] Still waiting for batch reply, elapsed: {:?}",
+                        "[DEBUG] ERROR: Timeout waiting for batch reply after {:?}",
                         start.elapsed()
                     );
+                    return Err(EverythingError::Timeout);
                 }
 
-                if !pump_messages(Duration::from_millis(50), cancelled) {
-                    log_debug!("[DEBUG] Search cancelled in pump_messages");
-                    return Err(EverythingError::Other("搜索已取消".to_string()));
-                }
-
+                // 尝试接收结果
                 match ipc_handle.result_receiver.try_recv() {
                     Ok(result) => {
                         batch_result = Some(result);
                         break;
                     }
                     Err(mpsc::TryRecvError::Empty) => {
+                        // 没有消息，使用自适应休眠时间
+                        // 连续空轮询次数越多，休眠时间越长（最多50ms），减少CPU占用
+                        consecutive_empty_count += 1;
+                        let sleep_ms = if consecutive_empty_count < 5 {
+                            1 // 前几次快速检查，保持响应性
+                        } else if consecutive_empty_count < 20 {
+                            5 // 中等休眠
+                        } else {
+                            20 // 较长休眠，减少CPU占用
+                        };
+
+                        std::thread::sleep(Duration::from_millis(sleep_ms));
+
+                        // 定期处理消息循环，确保窗口消息能被处理（但频率降低）
+                        if consecutive_empty_count % 10 == 0 {
+                            if !pump_messages(Duration::from_millis(10), cancelled) {
+                                log_debug!("[DEBUG] Search cancelled in pump_messages");
+                                return Err(EverythingError::Other("搜索已取消".to_string()));
+                            }
+                        }
+
+                        // 如果等待时间已经超过本批次超时阈值，则带着已获取的部分结果提前返回
                         if start.elapsed() > timeout {
-                            log_debug!(
-                                "[DEBUG] ERROR: Timeout waiting for batch reply after {:?}",
-                                start.elapsed()
-                            );
-                            return Err(EverythingError::Timeout);
+                            if !all_results.is_empty() {
+                                log_debug!(
+                                    "[DEBUG] Batch timeout after {:?}, returning partial results count={}",
+                                    start.elapsed(),
+                                    all_results.len()
+                                );
+                                timeout_with_partial = true;
+                                break;
+                            } else {
+                                log_debug!(
+                                    "[DEBUG] ERROR: Timeout waiting for batch reply after {:?}",
+                                    start.elapsed()
+                                );
+                                return Err(EverythingError::Timeout);
+                            }
                         }
                     }
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -1305,6 +1338,11 @@ pub mod windows {
                         return Err(EverythingError::IpcFailed("通道已断开".to_string()));
                     }
                 }
+            }
+
+            // 如果超时但已有部分结果，跳出分页循环并返回已有数据
+            if timeout_with_partial {
+                break;
             }
 
             // 处理本批结果
@@ -1385,7 +1423,12 @@ pub mod windows {
             offset += batch_results.len();
         }
 
-        let tot_items = total_from_everything.unwrap_or(all_results.len() as u32);
+        // 如果发生了超时但已返回部分结果，则报告实际返回数量作为总数，避免前端看到“总数很大但只收到很少”的错觉
+        let tot_items = if timeout_with_partial {
+            all_results.len() as u32
+        } else {
+            total_from_everything.unwrap_or(all_results.len() as u32)
+        };
 
         log_debug!(
             "[DEBUG] ===== search_files completed (paged): {} total results (Everything found {} total) =====",

@@ -1541,7 +1541,7 @@ pub async fn search_everything(
         let rt_handle = tokio::runtime::Handle::current();
         
         tokio::task::spawn_blocking(move || {
-            // 创建批次回调，用于实时发送结果（仅用于进度显示）
+            // 创建批次回调，用于实时发送进度与增量结果
             let on_batch = move |batch_results: &[everything_search::EverythingResult], total_count: u32, current_count: u32| {
                 // 在异步运行时中发送事件
                 let launcher = launcher_window.clone();
@@ -1599,6 +1599,7 @@ pub async fn search_everything(
                 resp.total_count
             );
 
+            // 返回完整结果，供前端展示
             Ok(resp)
         })
         .await

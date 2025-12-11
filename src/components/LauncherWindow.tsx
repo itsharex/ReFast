@@ -498,7 +498,7 @@ export function LauncherWindow() {
             const path = await tauriApi.getEverythingPath();
             setEverythingPath(path);
             if (path) {
-              console.log("Everything found at:", path);
+              // Path found
             }
             
             // Get Everything version
@@ -506,7 +506,7 @@ export function LauncherWindow() {
               const version = await tauriApi.getEverythingVersion();
               setEverythingVersion(version);
               if (version) {
-                console.log("Everything version:", version);
+                // Version retrieved
               }
             } catch (error) {
               console.error("Failed to get Everything version:", error);
@@ -564,7 +564,6 @@ export function LauncherWindow() {
         // 静默加载，不设置 isLoading 状态
         const allApps = await tauriApi.scanApplications();
         if (isMounted) {
-          console.log(`[DEBUG] Preloaded ${allApps.length} applications`);
           setApps(allApps);
           // 不设置 filteredApps，等待用户输入查询时再设置
         }
@@ -599,7 +598,6 @@ export function LauncherWindow() {
         if (lastTriggeredRef.current) {
           const { pluginId: lastId, time: lastTime } = lastTriggeredRef.current;
           if (lastId === pluginId && now - lastTime < 200) {
-            console.log(`[PluginHotkeys] ⚠️ Ignored duplicate trigger for plugin: ${pluginId} (within 200ms)`);
             return;
           }
         }
@@ -620,7 +618,6 @@ export function LauncherWindow() {
             tauriApi,
           };
           await executePlugin(pluginId, pluginContext);
-          console.log(`[PluginHotkeys] ✅ Plugin ${pluginId} executed successfully`);
         } catch (error) {
           console.error(`[PluginHotkeys] ❌ Failed to execute plugin ${pluginId}:`, error);
         }
@@ -630,7 +627,6 @@ export function LauncherWindow() {
       unsubscribeUpdated = await listen<Record<string, { modifiers: string[]; key: string }>>(
         "plugin-hotkeys-updated",
         (event) => {
-          console.log("[PluginHotkeys] Updated plugin hotkeys:", Object.keys(event.payload).length, "plugins");
         }
       );
     };
@@ -1246,17 +1242,11 @@ export function LauncherWindow() {
       // 这样可以确保只有在真正开始新搜索时才取消旧搜索
       if (currentSearchRef.current) {
         if (currentSearchRef.current.query !== trimmedQuery) {
-          console.log("[DEBUG] Cancelling previous Everything search before starting new search:", {
-            previousQuery: currentSearchRef.current.query,
-            newQuery: trimmedQuery,
-            wasCancelled: currentSearchRef.current.cancelled
-          });
           // 标记旧搜索为已取消
           currentSearchRef.current.cancelled = true;
           // 立即清空引用，避免状态混乱
           currentSearchRef.current = null;
         } else {
-          console.log("[DEBUG] Same query detected, previous search should continue:", trimmedQuery);
           // query 相同，不取消，直接返回（避免重复搜索）
           // 但是，如果结果为空，应该重新搜索（可能是用户全选后再次输入相同内容）
           const hasResults = filteredApps.length > 0 || filteredFiles.length > 0 || filteredMemos.length > 0 || 
@@ -1292,15 +1282,10 @@ export function LauncherWindow() {
         setSystemFolders([]);
       }
       if (isEverythingAvailable && !isPathQuery) {
-        console.log("Everything is available, calling searchEverything with query:", trimmedQuery);
         searchEverything(trimmedQuery).catch((error) => {
           console.error("searchEverything threw an error:", error);
         });
       } else {
-        console.log("Everything is not available or query is path-like, skipping Everything search.", {
-          isEverythingAvailable,
-          isPathQuery
-        });
         if (isPathQuery) {
           // 绝对路径查询不需要 Everything 结果，避免显示旧搜索残留
           setEverythingResults([]);
@@ -1411,6 +1396,86 @@ export function LauncherWindow() {
     
     // 使用去重后的 everythingResults
     const uniqueEverythingResults = deduplicatedEverythingResults;
+    
+    // 预处理 Everything 结果：分离可执行文件和普通文件，并统计过滤情况
+    const executableEverythingResults = uniqueEverythingResults
+      .filter((everything) => {
+        const pathLower = everything.path.toLowerCase();
+        return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
+      });
+    
+    let recycleBinFilteredCount = 0;
+    let duplicateFilteredCount = 0;
+    
+    const filteredExecutableEverything = executableEverythingResults
+      .filter((everything) => {
+        // 过滤掉回收站中的文件（$RECYCLE.BIN）
+        const pathLower = everything.path.toLowerCase();
+        if (pathLower.includes('$recycle.bin')) {
+          recycleBinFilteredCount++;
+          return false;
+        }
+        return true;
+      })
+      .filter((everything) => {
+        // 检查是否已经在 filteredApps 或 filteredFiles 中，如果已存在则过滤掉
+        const isInFilteredApps = filteredApps.some(app => {
+          const normalizedAppPath = app.path.toLowerCase().replace(/\\/g, "/");
+          const normalizedEverythingPath = everything.path.toLowerCase().replace(/\\/g, "/");
+          return normalizedAppPath === normalizedEverythingPath;
+        });
+        const isInFilteredFiles = filteredFiles.some(file => {
+          const normalizedFilePath = file.path.toLowerCase().replace(/\\/g, "/");
+          const normalizedEverythingPath = everything.path.toLowerCase().replace(/\\/g, "/");
+          return normalizedFilePath === normalizedEverythingPath;
+        });
+        const shouldInclude = !isInFilteredApps && !isInFilteredFiles;
+        if (!shouldInclude) {
+          duplicateFilteredCount++;
+        }
+        return shouldInclude;
+      })
+      .map((everything): SearchResult => {
+        return {
+          type: "app" as const,
+          app: {
+            name: everything.name,
+            path: everything.path,
+            icon: undefined,
+            description: undefined,
+            name_pinyin: undefined,
+            name_pinyin_initials: undefined,
+          },
+          displayName: everything.name,
+          path: everything.path,
+        };
+      });
+    
+    
+    const nonExecutableEverythingResults = uniqueEverythingResults
+      .filter((everything) => {
+        const pathLower = everything.path.toLowerCase();
+        return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
+      });
+    
+    let recycleBinFilteredCount2 = 0;
+    const filteredNonExecutableEverything = nonExecutableEverythingResults
+      .filter((everything) => {
+        // 过滤掉回收站中的文件（$RECYCLE.BIN）
+        const pathLower = everything.path.toLowerCase();
+        if (pathLower.includes('$recycle.bin')) {
+          recycleBinFilteredCount2++;
+          return false;
+        }
+        return true;
+      })
+      .map((everything) => ({
+        type: "everything" as const,
+        everything,
+        displayName: everything.name,
+        path: everything.path,
+      }));
+    
     
     const urlResults: SearchResult[] = detectedUrls.map((url) => ({
       type: "url" as const,
@@ -1564,77 +1629,16 @@ export function LauncherWindow() {
         displayName: folder.display_name,
         path: folder.path,
       })),
-      // 从 Everything 结果中分离可执行文件
-      // 使用已去重的 uniqueEverythingResults
-      ...uniqueEverythingResults
-        .filter((everything) => {
-          const pathLower = everything.path.toLowerCase();
-          return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
-        })
-        .filter((everything) => {
-          // 过滤掉回收站中的文件（$RECYCLE.BIN）
-          const pathLower = everything.path.toLowerCase();
-          if (pathLower.includes('$recycle.bin')) {
-            return false;
-          }
-          return true;
-        })
-        .filter((everything) => {
-          // 检查是否已经在 filteredApps 或 filteredFiles 中，如果已存在则过滤掉
-          const isInFilteredApps = filteredApps.some(app => {
-            const normalizedAppPath = app.path.toLowerCase().replace(/\\/g, "/");
-            const normalizedEverythingPath = everything.path.toLowerCase().replace(/\\/g, "/");
-            return normalizedAppPath === normalizedEverythingPath;
-          });
-          const isInFilteredFiles = filteredFiles.some(file => {
-            const normalizedFilePath = file.path.toLowerCase().replace(/\\/g, "/");
-            const normalizedEverythingPath = everything.path.toLowerCase().replace(/\\/g, "/");
-            return normalizedFilePath === normalizedEverythingPath;
-          });
-          const shouldInclude = !isInFilteredApps && !isInFilteredFiles;
-          return shouldInclude;
-        })
-        .map((everything): SearchResult => {
-          return {
-            type: "app" as const,
-            app: {
-              name: everything.name,
-              path: everything.path,
-              icon: undefined, // 图标将在渲染时尝试从应用列表获取
-              description: undefined,
-              name_pinyin: undefined,
-              name_pinyin_initials: undefined,
-            },
-            displayName: everything.name,
-            path: everything.path,
-          };
-        }),
-      // 普通 Everything 结果（非可执行文件）
-      // 使用已去重的 uniqueEverythingResults
-      ...uniqueEverythingResults
-        .filter((everything) => {
-          const pathLower = everything.path.toLowerCase();
-          return !pathLower.endsWith('.exe') && !pathLower.endsWith('.lnk');
-        })
-        .filter((everything) => {
-          // 过滤掉回收站中的文件（$RECYCLE.BIN）
-          const pathLower = everything.path.toLowerCase();
-          if (pathLower.includes('$recycle.bin')) {
-            return false;
-          }
-          return true;
-        })
-        .map((everything) => ({
-          type: "everything" as const,
-          everything,
-          displayName: everything.name,
-          path: everything.path,
-        })),
+      // 从 Everything 结果中分离可执行文件（已在数组外预处理）
+      ...filteredExecutableEverything,
+      // 普通 Everything 结果（非可执行文件，已在数组外预处理）
+      ...filteredNonExecutableEverything,
     ];
     
     // 对结果进行去重：如果同一个路径出现在多个结果源中，只保留一个
     // 优先保留历史文件结果（因为历史记录包含使用频率和最近使用时间，排序更准确）
     // 先收集历史文件结果的路径集合
+    const originalResultsCount = otherResults.length; // 保存原始结果数量
     const historyFilePaths = new Set<string>();
     for (const result of otherResults) {
       if (result.type === "file") {
@@ -1647,6 +1651,9 @@ export function LauncherWindow() {
     const deduplicatedResults: SearchResult[] = [];
     const addedHistoryPaths = new Set<string>(); // 用于跟踪已添加的历史文件路径，防止历史文件结果之间的重复
     const addedAppPaths = new Set<string>(); // 用于跟踪已添加的应用路径，防止应用结果之间的重复
+    let everythingFilteredByHistoryCount = 0; // 统计因与历史文件重复而被过滤的 Everything 结果数
+    let appFilteredByHistoryCount = 0; // 统计因与历史文件重复而被过滤的 app 结果数
+    
     for (const result of otherResults) {
       // 对于特殊类型（AI、历史、设置等）和 URL，不需要去重
       if (result.type === "ai" || result.type === "history" || result.type === "settings" || result.type === "url" || result.type === "email" || result.type === "json_formatter" || result.type === "plugin") {
@@ -1670,6 +1677,8 @@ export function LauncherWindow() {
         const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
         if (!historyFilePaths.has(normalizedPath)) {
           deduplicatedResults.push(result);
+        } else {
+          everythingFilteredByHistoryCount++;
         }
         // 如果路径已在历史文件结果中，跳过（不添加 Everything 结果）
         continue;
@@ -1685,6 +1694,10 @@ export function LauncherWindow() {
         if (!isInHistoryFilePaths && !isInAddedAppPaths) {
           addedAppPaths.add(normalizedPath);
           deduplicatedResults.push(result);
+        } else {
+          if (isInHistoryFilePaths) {
+            appFilteredByHistoryCount++;
+          }
         }
         continue;
       }
@@ -1698,6 +1711,7 @@ export function LauncherWindow() {
     
     // 使用去重后的结果
     otherResults = deduplicatedResults;
+    
     
     // 使用相关性评分系统对所有结果进行排序
     // 性能优化：当结果数量过多时，只对前1000条进行排序，避免对大量结果排序造成卡顿
@@ -1917,13 +1931,12 @@ export function LauncherWindow() {
     
     // 如果 JSON 中包含链接，优先显示 JSON 格式化选项，否则按原来的顺序（URLs -> Emails -> JSON formatter -> other results）
     // 但所有插件始终在最前面
-    if (jsonContainsLinks && jsonFormatterResult.length > 0) {
-      return [...pluginResults, ...jsonFormatterResult, ...urlResults, ...emailResults, ...otherResultsWithoutPlugins];
-    } else {
-      // URLs always come first, then emails, then JSON formatter, then other results sorted by open history
-      // 但所有插件始终在最前面
-      return [...pluginResults, ...urlResults, ...emailResults, ...jsonFormatterResult, ...otherResultsWithoutPlugins];
-    }
+    const finalResults = jsonContainsLinks && jsonFormatterResult.length > 0
+      ? [...pluginResults, ...jsonFormatterResult, ...urlResults, ...emailResults, ...otherResultsWithoutPlugins]
+      : [...pluginResults, ...urlResults, ...emailResults, ...jsonFormatterResult, ...otherResultsWithoutPlugins];
+    
+    
+    return finalResults;
   }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, systemFolders, everythingResults, detectedUrls, detectedEmails, detectedJson, openHistory, query, aiAnswer]);
 
   // 使用 ref 来跟踪当前的 query，避免闭包问题
@@ -2196,19 +2209,6 @@ export function LauncherWindow() {
           // 更新ref以跟踪当前的横向结果
           horizontalResultsRef.current = currentHorizontal;
           // 打印横向结果列表（增量加载中）
-          console.log('[horizontalResults] 增量更新横向结果:', currentHorizontal);
-          console.log('[horizontalResults] 数量:', currentHorizontal.length);
-          currentHorizontal.forEach((result, index) => {
-            console.log(`[horizontalResults] [${index}]`, {
-              type: result.type,
-              displayName: result.displayName,
-              path: result.path,
-              app: result.app ? {
-                name: result.app.name,
-                path: result.app.path,
-              } : undefined,
-            });
-          });
         } else {
           // 结果已过时，停止加载
           clearAllResults({
@@ -2268,7 +2268,6 @@ export function LauncherWindow() {
     if (query.trim() === "" && !aiAnswer) {
       setResults([]);
       setHorizontalResults([]);
-      console.log('[horizontalResults] 清空横向结果 (useEffect: 查询为空)');
       setVerticalResults([]);
       setSelectedHorizontalIndex(null);
       setSelectedVerticalIndex(null);
@@ -2408,7 +2407,6 @@ export function LauncherWindow() {
               const newScrollTop = newScrollHeight * scrollRatio;
               listRef.current.scrollTop = newScrollTop;
               shouldPreserveScrollRef.current = false;
-              console.log(`[滚动保持] 恢复滚动位置: ${savedScrollTop} -> ${newScrollTop} (ratio: ${scrollRatio.toFixed(3)})`);
             }
           });
         });
@@ -2856,7 +2854,6 @@ export function LauncherWindow() {
             // 监听扫描完成事件
             unlistenComplete = await listen<{ apps: AppInfo[] }>("app-rescan-complete", (event) => {
               const { apps } = event.payload;
-              console.log(`[DEBUG] Rescanned ${apps.length} applications`);
               setApps(apps);
               setFilteredApps(apps.slice(0, 10));
               setIsLoading(false);
@@ -2907,7 +2904,6 @@ export function LauncherWindow() {
         // 正常扫描：直接返回结果（移除不必要的延迟包装）
         try {
           const allApps = await tauriApi.scanApplications();
-          console.log(`[DEBUG] Loaded ${allApps.length} applications`);
           setApps(allApps);
           setFilteredApps(allApps.slice(0, 10));
         } catch (error) {
@@ -3046,9 +3042,7 @@ export function LauncherWindow() {
         return;
       }
       
-      console.log("[前端] searchSystemFolders called with query:", searchQuery);
       const results = await tauriApi.searchSystemFolders(searchQuery);
-      console.log("[前端] searchSystemFolders returned results:", results);
       
       // Only update if query hasn't changed
       if (query.trim() === searchQuery.trim()) {
@@ -3093,7 +3087,6 @@ export function LauncherWindow() {
         // 如果已经收到最终结果，忽略批次事件（防止重复添加）
         // 因为批次事件和最终结果包含相同的数据，如果最终结果已经设置，批次事件就是重复的
         if (finalResultsSetRef.current) {
-          console.log("[DEBUG] Ignoring batch event because final results already set");
           return;
         }
 
@@ -3175,14 +3168,9 @@ export function LauncherWindow() {
     if (currentSearchRef.current) {
       if (currentSearchRef.current.query === searchQuery) {
         // 如果 query 相同，说明是重复调用，不应该取消
-        console.log("[DEBUG] Search with same query already in progress, skipping duplicate call:", searchQuery);
         return;
       }
       // 如果 query 不同，说明需要取消旧搜索
-      console.log("[DEBUG] Previous search query differs, will cancel:", {
-        previousQuery: currentSearchRef.current.query,
-        newQuery: searchQuery
-      });
     }
 
     // 后端存在"相同查询进行中则报错跳过"的保护，这里每次新搜索前主动取消上一轮，避免误判卡死
@@ -3200,10 +3188,6 @@ export function LauncherWindow() {
     // 创建新的搜索请求（确保在清空旧引用后才创建新引用）
     const searchRequest = { query: searchQuery, cancelled: false };
     currentSearchRef.current = searchRequest;
-    console.log("[DEBUG] Starting new Everything search:", {
-      query: searchQuery,
-      timestamp: new Date().toISOString()
-    });
     
     // 性能优化：不要立即清空旧结果，避免列表闪烁
     // 旧结果会保留显示，直到新结果的第一批到达（在批次事件处理中清空）
@@ -3216,32 +3200,12 @@ export function LauncherWindow() {
     finalResultsSetRef.current = false;
     
     try {
-      console.log("[DEBUG] About to call tauriApi.searchEverything with query:", searchQuery);
-      console.log("[DEBUG] Current search ref state:", {
-        current: currentSearchRef.current ? {
-          query: currentSearchRef.current.query,
-          cancelled: currentSearchRef.current.cancelled
-        } : null
-      });
       const response = await tauriApi.searchEverything(searchQuery);
-      console.log("[DEBUG] tauriApi.searchEverything returned successfully for query:", searchQuery);
 
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H2',location:'LauncherWindow.tsx:final',message:'final response received',data:{respLen:response?.results?.length ?? 0,total_count:response?.total_count ?? null,currentQuery:currentSearchRef.current?.query ?? null,cancelled:currentSearchRef.current?.cancelled ?? null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
-      
       // 检查是否是当前搜索，以及 query 是否仍然有效
-      const finalGuardState = {
-        currentSearchQuery: currentSearchRef.current?.query ?? null,
-        currentSearchCancelled: currentSearchRef.current?.cancelled ?? null,
-        incomingSearchQuery: searchQuery,
-        uiQuery: query,
-      };
-      console.log("[最终结果][guard-check]", finalGuardState);
       if (currentSearchRef.current?.cancelled || 
           currentSearchRef.current?.query !== searchQuery ||
           query.trim() !== searchQuery.trim()) {
-        console.warn("[最终结果][guard-blocked] 忽略最终响应", finalGuardState);
         // 如果搜索被取消，确保清理状态
         if (currentSearchRef.current?.cancelled || currentSearchRef.current?.query !== searchQuery) {
           setIsSearchingEverything(false);
@@ -3249,43 +3213,16 @@ export function LauncherWindow() {
         return;
       }
       
-      // 使用最终结果覆盖批次累积的结果，确保结果数量准确
-      console.log(
-        "[最终结果] Everything search results (final):",
-        response.results.length,
-        "results found (total_count:",
-        response.total_count,
-        "), 批次累积结果数=",
-        everythingResults.length
-      );
-      
-      // 再次检查 query 是否仍然有效（防止在异步操作期间 query 被清空）
-      const secondCheckState = {
-        queryTrim: query.trim(),
-        searchQueryTrim: searchQuery.trim(),
-        queryMatch: query.trim() === searchQuery.trim(),
-        currentSearchRefExists: !!currentSearchRef.current,
-        currentSearchCancelled: currentSearchRef.current?.cancelled ?? null,
-        currentSearchQuery: currentSearchRef.current?.query ?? null,
-        queryMatchRef: currentSearchRef.current?.query === searchQuery,
-      };
-      console.log("[最终结果][second-check] 第二次检查状态", secondCheckState);
-      
       if (query.trim() === searchQuery.trim() && 
           currentSearchRef.current && 
           !currentSearchRef.current.cancelled &&
           currentSearchRef.current.query === searchQuery) {
-        console.log("[最终结果][second-check] ✓ 通过第二次检查，将处理结果");
         // 用最终结果覆盖批次累积的结果，因为最终结果才是后端实际返回的准确结果
         // 批次事件中的 total_count 是 Everything 找到的总数，可能远大于后端实际返回的结果数
         // 对结果进行去重，基于路径（path）字段，防止重复显示
         // 性能优化：使用 Map 实现 O(n) 去重，而不是 O(n²) 的 findIndex
         // 性能优化：使用 requestIdleCallback 延迟处理大量结果，避免阻塞主线程
         const processResults = () => {
-          console.log("[最终结果][processResults] 开始处理最终结果", {
-            respLen: response.results.length,
-            totalCount: response.total_count,
-          });
           const seenPaths = new Map<string, EverythingResult>();
           const uniqueResults: EverythingResult[] = [];
           for (const result of response.results) {
@@ -3294,14 +3231,6 @@ export function LauncherWindow() {
               uniqueResults.push(result);
             }
           }
-          console.log("[最终结果][process] 去重后数量", {
-            uniqueLen: uniqueResults.length,
-            totalCount: response.total_count,
-            currentSearch: currentSearchRef.current
-              ? { query: currentSearchRef.current.query, cancelled: currentSearchRef.current.cancelled }
-              : null,
-            uiQuery: query,
-          });
 
           // #region agent log
           fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'run1',hypothesisId:'H3',location:'LauncherWindow.tsx:processResults',message:'processing final results',data:{uniqueLen:uniqueResults.length,total_count:response.total_count,currentQuery:currentSearchRef.current?.query ?? null,cancelled:currentSearchRef.current?.cancelled ?? null},timestamp:Date.now()})}).catch(()=>{});
@@ -3319,10 +3248,6 @@ export function LauncherWindow() {
           processResults();
         } else {
           // 使用 setTimeout 将处理延迟到下一个事件循环，让 UI 有机会更新
-          console.log("[最终结果][process] 使用 setTimeout 延迟处理最终结果", {
-            respLen: response.results.length,
-            totalCount: response.total_count,
-          });
           setTimeout(processResults, 0);
         }
       } else {
@@ -3337,7 +3262,6 @@ export function LauncherWindow() {
       finalResultsSetRef.current = true;
     } catch (error) {
       if (currentSearchRef.current?.cancelled || currentSearchRef.current?.query !== searchQuery) {
-        console.log("Search was cancelled, ignoring error");
         // 如果搜索被取消，确保清理状态
         setIsSearchingEverything(false);
         return;
@@ -3363,7 +3287,6 @@ export function LauncherWindow() {
       ) {
         try {
           const status = await tauriApi.getEverythingStatus();
-          console.log("Re-checking Everything status after error:", status);
           setIsEverythingAvailable(status.available);
           setEverythingError(status.error || null);
           
@@ -3402,7 +3325,6 @@ export function LauncherWindow() {
 
   const handleStartEverything = async () => {
     try {
-      console.log("手动启动 Everything...");
       await tauriApi.startEverything();
       // 等待一下让 Everything 启动并初始化
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -3448,7 +3370,6 @@ export function LauncherWindow() {
       // 如果服务未运行，尝试自动启动
       if (!status.available && status.error === "SERVICE_NOT_RUNNING") {
         try {
-          console.log("Everything 服务未运行，尝试自动启动...");
           await tauriApi.startEverything();
           // 等待一下让 Everything 启动并初始化
           await new Promise(resolve => setTimeout(resolve, 2000));
@@ -3457,9 +3378,7 @@ export function LauncherWindow() {
           setIsEverythingAvailable(newStatus.available);
           setEverythingError(newStatus.error || null);
           
-          if (newStatus.available) {
-            console.log("Everything 启动成功");
-          } else {
+          if (!newStatus.available) {
             console.warn("Everything 启动后仍未可用:", newStatus.error);
           }
           return;
@@ -3477,9 +3396,6 @@ export function LauncherWindow() {
       if (status.available) {
         const path = await tauriApi.getEverythingPath();
         setEverythingPath(path);
-        if (path) {
-          console.log("Everything found at:", path);
-        }
       }
     } catch (error) {
       console.error("Failed to check Everything:", error);
@@ -3759,7 +3675,6 @@ export function LauncherWindow() {
 
   const handlePaste = async (e: React.ClipboardEvent) => {
     const clipboardTypes = Array.from(e.clipboardData.types);
-    console.log("Clipboard types:", clipboardTypes);
     
     // 首先检查剪贴板是否包含图片
     const imageTypes = clipboardTypes.filter(type => type.startsWith("image/"));
@@ -3809,7 +3724,6 @@ export function LauncherWindow() {
             
             // 保存图片到临时文件
             const tempPath = await tauriApi.saveClipboardImage(uint8Array, extension);
-            console.log("Saved clipboard image to:", tempPath);
             
             // 保存粘贴的图片路径到状态
             setPastedImagePath(tempPath);
