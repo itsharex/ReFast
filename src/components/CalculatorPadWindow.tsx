@@ -92,6 +92,20 @@ export function CalculatorPadWindow() {
   const [_focusedLineId, setFocusedLineId] = useState<string>("1");
   const inputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
 
+  // 组件首次挂载时自动聚焦到第一行输入框
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const firstInput = inputRefs.current.get("1");
+      if (firstInput) {
+        firstInput.focus();
+      }
+    }, 100);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, []);
+
   // 监听来自启动器的表达式设置事件
   useEffect(() => {
     let unlisten: (() => void) | null = null;
