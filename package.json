@@ -8,10 +8,6 @@
     "dev": "vite",
     "dev:tauri": "tauri dev",
     "build": "tsc && vite build",
-    "sync:version": "node scripts/sync-version.js",
-    "version:patch": "node scripts/sync-version.js patch",
-    "version:minor": "node scripts/sync-version.js minor",
-    "version:major": "node scripts/sync-version.js major",
     "build:tauri": "node scripts/sync-version.js patch && tauri build",
     "preview": "vite preview",
     "tauri": "tauri"
