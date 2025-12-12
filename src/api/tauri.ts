@@ -8,7 +8,6 @@ import type {
   EverythingResult,
   ShortcutItem,
   MemoItem,
-  SystemFolderItem,
   IndexStatus,
   FilePreview,
   DatabaseBackupList,
@@ -463,9 +462,6 @@ export const tauriApi = {
     return invoke("read_plugin_manifest", { pluginDir });
   },
 
-  async searchSystemFolders(query: string): Promise<SystemFolderItem[]> {
-    return invoke("search_system_folders", { query });
-  },
 
   // Settings APIs
   async getSettings(): Promise<{ ollama: { model: string; base_url: string }; startup_enabled?: boolean; result_style?: "compact" | "soft" | "skeuomorphic"; close_on_blur?: boolean }> {

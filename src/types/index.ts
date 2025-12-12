@@ -136,12 +136,6 @@ export interface FilePreview {
   error?: string;
 }
 
-export interface SystemFolderItem {
-  name: string;
-  path: string;
-  display_name: string;
-  is_folder: boolean;
-}
 
 export interface ShortcutItem {
   id: string;

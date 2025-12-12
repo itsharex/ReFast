@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { tauriApi } from "../api/tauri";
 import { trackEvent } from "../api/events";
-import type { AppInfo, FileHistoryItem, EverythingResult, MemoItem, PluginContext, SystemFolderItem } from "../types";
+import type { AppInfo, FileHistoryItem, EverythingResult, MemoItem, PluginContext } from "../types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -30,7 +30,7 @@ import { clearAllResults, resetSelectedIndices, selectFirstHorizontal, selectFir
 import { adjustWindowSize, getMainContainer as getMainContainerUtil } from "../utils/windowUtils";
 
 type SearchResult = {
-  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
+  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "history" | "ai" | "json_formatter" | "settings";
   app?: AppInfo;
   file?: FileHistoryItem;
   everything?: EverythingResult;
@@ -38,7 +38,6 @@ type SearchResult = {
   email?: string;
   memo?: MemoItem;
   plugin?: { id: string; name: string; description?: string };
-  systemFolder?: SystemFolderItem;
   aiAnswer?: string;
   jsonContent?: string;
   displayName: string;
@@ -96,7 +95,6 @@ export function LauncherWindow() {
   const [isMemoListMode, setIsMemoListMode] = useState(true);
   const [filteredPlugins, setFilteredPlugins] = useState<Array<{ id: string; name: string; description?: string }>>([]);
   const [isPluginListModalOpen, setIsPluginListModalOpen] = useState(false);
-  const [systemFolders, setSystemFolders] = useState<SystemFolderItem[]>([]);
   const [openHistory, setOpenHistory] = useState<Record<string, number>>({});
   const [launchingAppPath, setLaunchingAppPath] = useState<string | null>(null); // 正在启动的应用路径
   const [pastedImagePath, setPastedImagePath] = useState<string | null>(null); // 粘贴的图片路径
@@ -786,11 +784,7 @@ export function LauncherWindow() {
             return result.type === "plugin";
           });
           
-          const systemFolderResults = results.filter(result => {
-            return result.type === "system_folder";
-          });
-          
-          const horizontalResults = [...executableResults, ...pluginResults, ...systemFolderResults];
+          const horizontalResults = [...executableResults, ...pluginResults];
           const horizontalIndices = horizontalResults.map(hr => results.indexOf(hr)).filter(idx => idx >= 0);
           
           
@@ -1147,7 +1141,6 @@ export function LauncherWindow() {
       setFilteredFiles([]);
       setFilteredMemos([]);
       setFilteredPlugins([]);
-      setSystemFolders([]);
       setEverythingResults([]);
       setEverythingTotalCount(null);
       setEverythingCurrentCount(0);
@@ -1167,7 +1160,6 @@ export function LauncherWindow() {
       setFilteredFiles([]);
       setFilteredMemos([]);
       setFilteredPlugins([]);
-      setSystemFolders([]);
       setEverythingResults([]);
       setEverythingTotalCount(null);
       setEverythingCurrentCount(0);
@@ -1207,8 +1199,20 @@ export function LauncherWindow() {
     // 如果查询与上次相同，跳过搜索（去重机制）
     // 但是，如果结果为空（可能是用户全选后再次输入相同内容导致结果被清空），应该重新搜索
     const hasResults = filteredApps.length > 0 || filteredFiles.length > 0 || filteredMemos.length > 0 || 
-                       filteredPlugins.length > 0 || systemFolders.length > 0 || everythingResults.length > 0;
+                       filteredPlugins.length > 0 || everythingResults.length > 0;
+    console.log("[搜索调试] useEffect去重检查:", {
+      trimmedQuery,
+      lastSearchQuery: lastSearchQueryRef.current,
+      hasResults,
+      filteredApps: filteredApps.length,
+      filteredFiles: filteredFiles.length,
+      filteredMemos: filteredMemos.length,
+      filteredPlugins: filteredPlugins.length,
+      everythingResults: everythingResults.length,
+      willSkip: trimmedQuery === lastSearchQueryRef.current && hasResults
+    });
     if (trimmedQuery === lastSearchQueryRef.current && hasResults) {
+      console.log("[搜索调试] ✓ 去重检查通过，跳过搜索");
       return;
     }
     
@@ -1224,11 +1228,20 @@ export function LauncherWindow() {
     } else if (queryLength >= 6) {
       debounceTime = 200; // long queries
     }
+    console.log("[搜索调试] ✗ 去重检查失败，进入防抖，防抖时间:", debounceTime, "ms");
     
     const timeoutId = setTimeout(() => {
+      console.log("[搜索调试] setTimeout执行，防抖结束");
       // 再次检查查询是否仍然有效（可能在防抖期间已被清空或改变）
       const currentQuery = query.trim();
+      console.log("[搜索调试] setTimeout查询检查:", {
+        currentQuery,
+        trimmedQuery,
+        queryChanged: currentQuery !== trimmedQuery,
+        isEmpty: currentQuery === ""
+      });
       if (currentQuery === "" || currentQuery !== trimmedQuery) {
+        console.log("[搜索调试] ✗ 查询已改变或为空，取消搜索");
         return;
       }
       
@@ -1241,18 +1254,37 @@ export function LauncherWindow() {
       
       // 在防抖结束后、开始搜索前，取消之前的 Everything 搜索
       // 这样可以确保只有在真正开始新搜索时才取消旧搜索
+      console.log("[搜索调试] setTimeout检查currentSearchRef:", {
+        hasCurrentSearch: !!currentSearchRef.current,
+        currentSearchQuery: currentSearchRef.current?.query,
+        trimmedQuery,
+        queryMatch: currentSearchRef.current?.query === trimmedQuery,
+        isCancelled: currentSearchRef.current?.cancelled
+      });
+      
       if (currentSearchRef.current) {
         if (currentSearchRef.current.query !== trimmedQuery) {
+          console.log("[搜索调试] ✗ 查询不同，取消旧搜索");
           // 标记旧搜索为已取消
           currentSearchRef.current.cancelled = true;
           // 立即清空引用，避免状态混乱
           currentSearchRef.current = null;
         } else {
+          console.log("[搜索调试] ⚠ 查询相同，检查结果状态");
           // query 相同，不取消，直接返回（避免重复搜索）
           // 但是，如果结果为空，应该重新搜索（可能是用户全选后再次输入相同内容）
           const hasResults = filteredApps.length > 0 || filteredFiles.length > 0 || filteredMemos.length > 0 || 
-                             filteredPlugins.length > 0 || systemFolders.length > 0 || everythingResults.length > 0;
+                             filteredPlugins.length > 0 || everythingResults.length > 0;
+          console.log("[搜索调试] setTimeout结果检查:", {
+            hasResults,
+            filteredApps: filteredApps.length,
+            filteredFiles: filteredFiles.length,
+            filteredMemos: filteredMemos.length,
+            filteredPlugins: filteredPlugins.length,
+            everythingResults: everythingResults.length
+          });
           if (!hasResults) {
+            console.log("[搜索调试] ✗ 结果为空，清空currentSearchRef，继续搜索");
             // 清空currentSearchRef，允许重新搜索everything
             if (currentSearchRef.current) {
               currentSearchRef.current.cancelled = true;
@@ -1260,31 +1292,34 @@ export function LauncherWindow() {
             }
             // 继续执行搜索，不返回
           } else {
+            console.log("[搜索调试] ✓ 有结果，跳过重复搜索");
             return;
           }
         }
+      } else {
+        console.log("[搜索调试] ✓ 无currentSearchRef，继续执行搜索");
       }
       
       // 标记当前查询为已搜索
       lastSearchQueryRef.current = trimmedQuery;
+      console.log("[搜索调试] ✓ 开始执行搜索，更新lastSearchQueryRef为:", trimmedQuery);
       // 立即清空所有搜索结果，避免显示旧结果
       setFilteredApps([]);
       setFilteredFiles([]);
       setFilteredMemos([]);
       setFilteredPlugins([]);
-      setSystemFolders([]);
+      console.log("[搜索调试] 调用各搜索函数:", {
+        isEverythingAvailable,
+        isPathQuery
+      });
       searchApplications(trimmedQuery);
       searchFileHistory(trimmedQuery);
       searchMemos(trimmedQuery);
       handleSearchPlugins(trimmedQuery);
-      if (!isPathQuery) {
-        searchSystemFolders(trimmedQuery);
-      } else {
-        setSystemFolders([]);
-      }
       if (isEverythingAvailable && !isPathQuery) {
+        console.log("[搜索调试] 调用searchEverything:", trimmedQuery);
         searchEverything(trimmedQuery).catch((error) => {
-          console.error("searchEverything threw an error:", error);
+          console.error("[搜索调试] searchEverything错误:", error);
         });
       } else {
         if (isPathQuery) {
@@ -1623,13 +1658,6 @@ export function LauncherWindow() {
           displayName: plugin.name,
           path: plugin.id,
         })),
-      // 显示系统文件夹结果
-      ...systemFolders.map((folder) => ({
-        type: "system_folder" as const,
-        systemFolder: folder,
-        displayName: folder.display_name,
-        path: folder.path,
-      })),
       // 从 Everything 结果中分离可执行文件（已在数组外预处理）
       ...filteredExecutableEverything,
       // 普通 Everything 结果（非可执行文件，已在数组外预处理）
@@ -1702,7 +1730,7 @@ export function LauncherWindow() {
         continue;
       }
       
-      // 对于其他类型（system_folder 等），检查路径是否重复
+      // 对于其他类型，检查路径是否重复
       const normalizedPath = result.path.toLowerCase().replace(/\\/g, "/");
       if (!historyFilePaths.has(normalizedPath)) {
         deduplicatedResults.push(result);
@@ -1937,7 +1965,7 @@ export function LauncherWindow() {
     
     
     return finalResults;
-  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, systemFolders, everythingResults, detectedUrls, detectedEmails, detectedJson, openHistory, query, aiAnswer]);
+  }, [filteredApps, filteredFiles, filteredMemos, filteredPlugins, everythingResults, detectedUrls, detectedEmails, detectedJson, openHistory, query, aiAnswer]);
 
   // 使用 ref 来跟踪当前的 query，避免闭包问题
   const queryRef = useRef(query);
@@ -2044,8 +2072,7 @@ export function LauncherWindow() {
     const deduplicatedExecutableResults = Array.from(normalizedPathMap.values());
     
     const pluginResults = allResults.filter(result => result.type === "plugin");
-    const systemFolderResults = allResults.filter(result => result.type === "system_folder");
-    const horizontal = [...deduplicatedExecutableResults, ...pluginResults, ...systemFolderResults];
+    const horizontal = [...deduplicatedExecutableResults, ...pluginResults];
     
     const vertical = allResults.filter(result => {
       // Not an executable app, not a plugin, and not a system folder
@@ -2057,7 +2084,7 @@ export function LauncherWindow() {
                !pathLower.startsWith('shell:appsfolder') &&
                !pathLower.startsWith('ms-settings:');
       }
-      return result.type !== "plugin" && result.type !== "system_folder";
+      return result.type !== "plugin";
     });
     return { horizontal, vertical };
   };
@@ -2356,11 +2383,8 @@ export function LauncherWindow() {
       return result.type === "plugin";
     });
     
-    const systemFolderResults = results.filter(result => {
-      return result.type === "system_folder";
-    });
     
-    const horizontalResults = [...executableResults, ...pluginResults, ...systemFolderResults];
+    const horizontalResults = [...executableResults, ...pluginResults];
     
     
     // If there are horizontal results, set selectedIndex to the first one
@@ -3034,29 +3058,6 @@ export function LauncherWindow() {
     }
   };
 
-  const searchSystemFolders = async (searchQuery: string) => {
-    try {
-      // Don't search if query is empty
-      if (!searchQuery || searchQuery.trim() === "") {
-        setSystemFolders([]);
-        return;
-      }
-      
-      const results = await tauriApi.searchSystemFolders(searchQuery);
-      
-      // Only update if query hasn't changed
-      if (query.trim() === searchQuery.trim()) {
-        setSystemFolders(results);
-      } else {
-        setSystemFolders([]);
-      }
-    } catch (error) {
-      console.error("Failed to search system folders:", error);
-      if (!searchQuery || searchQuery.trim() === "") {
-        setSystemFolders([]);
-      }
-    }
-  };
 
   // Use ref to track current search request and allow cancellation
   const currentSearchRef = useRef<{ query: string; cancelled: boolean } | null>(null);
@@ -3161,12 +3162,24 @@ export function LauncherWindow() {
     
     // 检查是否是重复调用（在取消之前检查，避免不必要的取消操作）
     // 注意：防抖结束后已经检查过了，但这里需要再次检查，因为可能有异步调用
+    console.log("[搜索调试] searchEverything开始:", {
+      searchQuery,
+      hasCurrentSearch: !!currentSearchRef.current,
+      currentSearchQuery: currentSearchRef.current?.query,
+      currentSearchCancelled: currentSearchRef.current?.cancelled,
+      queryMatch: currentSearchRef.current?.query === searchQuery
+    });
+    
     if (currentSearchRef.current) {
       if (currentSearchRef.current.query === searchQuery) {
+        console.log("[搜索调试] ✗ searchEverything: 查询相同，直接返回（重复调用保护）");
         // 如果 query 相同，说明是重复调用，不应该取消
         return;
       }
+      console.log("[搜索调试] ✓ searchEverything: 查询不同，继续执行");
       // 如果 query 不同，说明需要取消旧搜索
+    } else {
+      console.log("[搜索调试] ✓ searchEverything: 无currentSearchRef，继续执行");
     }
 
     // 后端存在"相同查询进行中则报错跳过"的保护，这里每次新搜索前主动取消上一轮，避免误判卡死
@@ -3177,6 +3190,10 @@ export function LauncherWindow() {
     }
     // 前端同步清理当前搜索引用，允许同一关键字立即重新发起请求
     if (currentSearchRef.current) {
+      console.log("[搜索调试] searchEverything: 清空旧的currentSearchRef:", {
+        oldQuery: currentSearchRef.current.query,
+        oldCancelled: currentSearchRef.current.cancelled
+      });
       currentSearchRef.current.cancelled = true;
       currentSearchRef.current = null;
     }
@@ -3184,6 +3201,10 @@ export function LauncherWindow() {
     // 创建新的搜索请求（确保在清空旧引用后才创建新引用）
     const searchRequest = { query: searchQuery, cancelled: false };
     currentSearchRef.current = searchRequest;
+    console.log("[搜索调试] searchEverything: 创建新的currentSearchRef:", {
+      query: searchRequest.query,
+      cancelled: searchRequest.cancelled
+    });
     
     // 性能优化：不要立即清空旧结果，避免列表闪烁
     // 旧结果会保留显示，直到新结果的第一批到达（在批次事件处理中清空）
@@ -3550,18 +3571,6 @@ export function LauncherWindow() {
         // Launch Everything result and add to file history
         await tauriApi.launchFile(result.everything.path);
         await tauriApi.addFileToHistory(result.everything.path);
-      } else if (result.type === "system_folder" && result.systemFolder) {
-        // Launch system folder
-        await tauriApi.launchFile(result.systemFolder.path);
-        // 尝试添加到历史记录（失败也不影响）
-        try {
-          await tauriApi.addFileToHistory(result.systemFolder.path);
-        } catch (error) {
-          console.error("Failed to add system folder to history:", error);
-        }
-        // 打开系统文件夹后隐藏启动器
-        await hideLauncherAndResetState();
-        return;
       } else if (result.type === "memo" && result.memo) {
         // 打开备忘录详情弹窗（单条模式）
         setIsMemoListMode(false);

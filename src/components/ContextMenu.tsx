@@ -69,7 +69,6 @@ export function ContextMenu({
   const hasFileMenu =
     menu.result.type === "file" ||
     menu.result.type === "everything" ||
-    menu.result.type === "system_folder" ||
     menu.result.type === "app";
   const hasMemoMenu = menu.result.type === "memo" && menu.result.memo;
   const hasUrlMenu = menu.result.type === "url" && menu.result.url;

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { AppInfo, FileHistoryItem, EverythingResult, MemoItem, SystemFolderItem } from "../types";
+import type { AppInfo, FileHistoryItem, EverythingResult, MemoItem } from "../types";
 import type { ThemeConfig, ResultStyle } from "../utils/themeConfig";
 import { isFolderLikePath } from "../utils/launcherUtils";
 import { tauriApi } from "../api/tauri";
@@ -10,7 +10,7 @@ const normalizePathForComparison = (path: string): string => {
 };
 
 type SearchResult = {
-  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "system_folder" | "history" | "ai" | "json_formatter" | "settings";
+  type: "app" | "file" | "everything" | "url" | "email" | "memo" | "plugin" | "history" | "ai" | "json_formatter" | "settings";
   app?: AppInfo;
   file?: FileHistoryItem;
   everything?: EverythingResult;
@@ -18,7 +18,6 @@ type SearchResult = {
   email?: string;
   memo?: MemoItem;
   plugin?: { id: string; name: string; description?: string };
-  systemFolder?: SystemFolderItem;
   aiAnswer?: string;
   jsonContent?: string;
   displayName: string;
@@ -64,14 +63,14 @@ export function ResultIcon({
 
   const iconSize = getIconSize();
   
-  // 用于存储动态提取的图标（适用于 file、everything、system_folder 类型的 .lnk/.exe 文件）
+  // 用于存储动态提取的图标（适用于 file、everything 类型的 .lnk/.exe 文件）
   const [extractedFileIcon, setExtractedFileIcon] = useState<string | null>(null);
   const previousFilePathRef = useRef<string>("");
   
   // 检查是否是 .lnk 或 .exe 文件，且需要提取图标
   const filePath = result.path || "";
   const isLnkOrExe = filePath.toLowerCase().endsWith(".lnk") || filePath.toLowerCase().endsWith(".exe");
-  const isFileTypeNeedingIcon = (result.type === "file" || result.type === "everything" || result.type === "system_folder") && isLnkOrExe;
+  const isFileTypeNeedingIcon = (result.type === "file" || result.type === "everything") && isLnkOrExe;
   
   // 当 filePath 改变时，重置提取的图标
   useEffect(() => {
@@ -81,7 +80,7 @@ export function ResultIcon({
     }
   }, [filePath]);
   
-  // 对于 file、everything、system_folder 类型的 .lnk/.exe 文件，如果没有图标，尝试动态提取
+  // 对于 file、everything 类型的 .lnk/.exe 文件，如果没有图标，尝试动态提取
   useEffect(() => {
     if (isFileTypeNeedingIcon && !extractedFileIcon && filePath) {
       // 先检查是否在应用列表中有图标（使用规范化路径比较）
@@ -408,32 +407,8 @@ export function ResultIcon({
     );
   }
 
-  // 处理系统文件夹：回收站显示垃圾桶图标
-  if (result.type === "system_folder" && result.systemFolder) {
-    const folderName = result.systemFolder.name || "";
-    // 检查是否是回收站（支持中文和英文名称）
-    if (folderName === "回收站" || folderName.toLowerCase().includes("recycle")) {
-      return (
-        <svg
-          className={`${iconSize} ${theme.iconColor(isSelected, "text-gray-600")}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-          />
-        </svg>
-      );
-    }
-  }
-
-  // 处理文件夹（系统文件夹、文件历史、Everything 结果）
+  // 处理文件夹（文件历史、Everything 结果）
   const isFolder =
-    (result.type === "system_folder" && result.systemFolder?.is_folder) ||
     (result.type === "file" &&
       ((result.file?.is_folder ?? null) !== null ? !!result.file?.is_folder : isFolderLikePath(result.path))) ||
     (result.type === "everything" &&
@@ -457,8 +432,8 @@ export function ResultIcon({
     );
   }
 
-  // 处理文件（file、everything、system_folder 但不是文件夹的情况）
-  if (result.type === "file" || result.type === "everything" || result.type === "system_folder") {
+  // 处理文件（file、everything 但不是文件夹的情况）
+  if (result.type === "file" || result.type === "everything") {
     const filePath = result.path || "";
     const isLnkOrExe = filePath.toLowerCase().endsWith(".lnk") || filePath.toLowerCase().endsWith(".exe");
     

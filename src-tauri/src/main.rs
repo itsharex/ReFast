@@ -20,7 +20,6 @@ mod recording;
 mod replay;
 mod settings;
 mod shortcuts;
-mod system_folders_search;
 mod window_config;
 
 use crate::commands::get_app_data_dir;
@@ -613,6 +612,7 @@ fn main() {
             add_file_to_history,
             search_file_history,
             search_everything,
+            cancel_everything_search,
             start_everything_search_session,
             get_everything_search_range,
             close_everything_search_session,
@@ -674,7 +674,6 @@ fn main() {
             get_plugin_directory,
             scan_plugin_directory,
             read_plugin_manifest,
-            search_system_folders,
             get_settings,
             save_settings,
             show_settings_window,
