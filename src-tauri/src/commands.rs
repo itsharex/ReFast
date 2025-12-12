@@ -2863,6 +2863,217 @@ pub fn save_clipboard_image(image_data: Vec<u8>, extension: String) -> Result<St
 }
 
 #[tauri::command]
+pub fn write_debug_log(message: String) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let result = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(r"d:\project\re-fast\.cursor\debug.log")
+        .and_then(|mut f| {
+            writeln!(f, r#"{{"timestamp":{},"location":"frontend","message":"{}","sessionId":"debug-session","runId":"run1"}}"#, 
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+                message.replace('"', r#"\""#).replace('\n', "\\n").replace('\r', "\\r")
+            )
+        });
+    if let Err(e) = result {
+        eprintln!("[DEBUG] Failed to write debug log: {}", e);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn paste_text_to_cursor(_text: String) -> Result<(), String> {
+    // 注意：text 参数现在不再使用，因为剪贴板已经通过 navigator.clipboard.writeText 在前端设置好了
+    // 这个函数现在只负责模拟 Ctrl+V 按键
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+        };
+
+        const VK_CONTROL: u16 = 0x11; // Ctrl key
+        const VK_V: u16 = 0x56; // V key
+
+        // 剪贴板已经通过 navigator.clipboard.writeText 在前端设置好了
+        // 这里只需要模拟 Ctrl+V 按键即可
+        
+        // 等待一小段时间确保剪贴板操作完成
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        unsafe {
+
+            // 模拟 Ctrl+V 按键
+            // 按下 Ctrl
+            let mut input_ctrl_down = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: 0,
+                        dwFlags: 0,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+
+            let ctrl_down_result = SendInput(1, &mut input_ctrl_down, std::mem::size_of::<INPUT>() as i32);
+            if ctrl_down_result == 0 {
+                return Err("Failed to send Ctrl key down".to_string());
+            }
+
+            // 按下 V
+            let mut input_v_down = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_V,
+                        wScan: 0,
+                        dwFlags: 0,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+
+            let v_down_result = SendInput(1, &mut input_v_down, std::mem::size_of::<INPUT>() as i32);
+            if v_down_result == 0 {
+                // 释放 Ctrl 键
+                let mut input_ctrl_up = INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VK_CONTROL,
+                            wScan: 0,
+                            dwFlags: KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                };
+                SendInput(1, &mut input_ctrl_up, std::mem::size_of::<INPUT>() as i32);
+                return Err("Failed to send V key down".to_string());
+            }
+
+            // 短暂延迟，确保 V 键按下事件被正确处理
+            std::thread::sleep(std::time::Duration::from_millis(50));
+
+            // 释放 V
+            let mut input_v_up = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_V,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+
+            let v_up_result = SendInput(1, &mut input_v_up, std::mem::size_of::<INPUT>() as i32);
+            if v_up_result == 0 {
+                // 释放 Ctrl 键
+                let mut input_ctrl_up = INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VK_CONTROL,
+                            wScan: 0,
+                            dwFlags: KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                };
+                SendInput(1, &mut input_ctrl_up, std::mem::size_of::<INPUT>() as i32);
+                return Err("Failed to send V key up".to_string());
+            }
+
+            // 释放 Ctrl
+            let mut input_ctrl_up = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_CONTROL,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            };
+
+            let ctrl_up_result = SendInput(1, &mut input_ctrl_up, std::mem::size_of::<INPUT>() as i32);
+            if ctrl_up_result == 0 {
+                return Err("Failed to send Ctrl key up".to_string());
+            }
+
+            Ok(())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write;
+        use std::process::Command;
+        // macOS 使用 pbcopy 复制到剪贴板，然后使用 osascript 模拟粘贴
+        Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start pbcopy: {}", e))?
+            .stdin
+            .ok_or_else(|| "Failed to get pbcopy stdin".to_string())?
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("Failed to write to pbcopy: {}", e))?;
+
+        // 使用 osascript 模拟 Cmd+V
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+            .output()
+            .map_err(|e| format!("Failed to simulate paste: {}", e))?;
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        use std::process::Command;
+        // Linux 使用 xclip 复制到剪贴板，然后使用 xdotool 模拟粘贴
+        Command::new("xclip")
+            .arg("-selection")
+            .arg("clipboard")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to start xclip: {}", e))?
+            .stdin
+            .ok_or_else(|| "Failed to get xclip stdin".to_string())?
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("Failed to write to xclip: {}", e))?;
+
+        // 使用 xdotool 模拟 Ctrl+V
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Command::new("xdotool")
+            .arg("key")
+            .arg("ctrl+v")
+            .output()
+            .map_err(|e| format!("Failed to simulate paste: {}", e))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Err("Paste to cursor is not supported on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 pub fn get_downloads_folder() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {

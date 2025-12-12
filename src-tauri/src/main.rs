@@ -637,6 +637,8 @@ fn main() {
             get_clipboard_file_path,
             get_clipboard_text,
             save_clipboard_image,
+            paste_text_to_cursor,
+            write_debug_log,
             get_downloads_folder,
             copy_file_to_downloads,
             reveal_in_folder,

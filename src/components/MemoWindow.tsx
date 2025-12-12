@@ -26,6 +26,11 @@ export function MemoWindow() {
     await window.close();
   }, []);
 
+  const handleHide = useCallback(async () => {
+    const window = getCurrentWindow();
+    await window.hide();
+  }, []);
+
   useEffect(() => {
     loadMemos();
   }, []);
@@ -175,6 +180,30 @@ export function MemoWindow() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          // 组合标题和内容
+                          const textToPaste = memo.title 
+                            ? (memo.content ? `${memo.title}\n${memo.content}` : memo.title)
+                            : (memo.content || "(无内容)");
+                          // 使用 navigator.clipboard.writeText 设置剪贴板（和复制按钮一样的方式）
+                          await navigator.clipboard.writeText(textToPaste);
+                          // 先隐藏窗口（而不是关闭），让用户有时间切换到目标窗口，同时保持 JavaScript 上下文
+                          await handleHide();
+                          // 然后只模拟按键（剪贴板已经通过 navigator.clipboard.writeText 设置好了）
+                          await tauriApi.pasteTextToCursor("");
+                        } catch (error) {
+                          console.error("Failed to paste to cursor:", error);
+                          alert(`插入失败: ${error}`);
+                        }
+                      }}
+                      className="px-2 py-1 text-xs text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded border border-purple-300 hover:border-purple-400 transition-colors"
+                      title="插入到系统光标位置"
+                    >
+                      插入
+                    </button>
                     <button
                       onClick={async (e) => {
                         e.stopPropagation();

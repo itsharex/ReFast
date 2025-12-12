@@ -140,6 +140,14 @@ export const tauriApi = {
     return invoke("save_clipboard_image", { imageData: Array.from(imageData), extension });
   },
 
+  async writeDebugLog(message: string): Promise<void> {
+    return invoke("write_debug_log", { message });
+  },
+
+  async pasteTextToCursor(text: string): Promise<void> {
+    return invoke("paste_text_to_cursor", { text });
+  },
+
   async getDownloadsFolder(): Promise<string> {
     return invoke("get_downloads_folder");
   },
