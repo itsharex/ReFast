@@ -482,8 +482,6 @@ fn main() {
                                 if !plugin_hotkeys.is_empty() {
                                     if let Err(e) = hotkey_handler::windows::update_plugin_hotkeys(plugin_hotkeys) {
                                         eprintln!("[Main] Failed to register plugin hotkeys: {}", e);
-                                    } else {
-                                        eprintln!("[Main] Registered {} plugin hotkeys", plugin_hotkey_count);
                                     }
                                 }
                                 
@@ -553,9 +551,6 @@ fn main() {
             {
                 use crate::logger;
                 logger::init_log_file_early();
-                if let Some(log_path) = logger::get_log_file_path() {
-                    eprintln!("[Main] Logger log file: {}", log_path.display());
-                }
             }
 
             // Load app cache on startup and start background scan

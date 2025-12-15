@@ -53,11 +53,6 @@ pub fn load_history_into(
         conn
     };
 
-    println!(
-        "[后端] file_history.load_history_into: Loading from SQLite at {:?}",
-        db::get_db_path(app_data_dir)
-    );
-
     let mut stmt = conn
         .prepare(
             "SELECT path, name, last_used, use_count, is_folder FROM file_history ORDER BY last_used DESC",
@@ -291,10 +286,8 @@ pub fn lock_history(
 // 获取写锁的辅助函数（需要公开，供其他模块使用）
 pub fn lock_history_write(
 ) -> Result<std::sync::RwLockWriteGuard<'static, HashMap<String, FileHistoryItem>>, String> {
-    println!("[file_history] lock_history_write: 尝试获取写锁...");
     match FILE_HISTORY.write() {
         Ok(guard) => {
-            println!("[file_history] lock_history_write: ✓ 获取写锁成功，缓存大小: {}", guard.len());
             Ok(guard)
         }
         Err(e) => {

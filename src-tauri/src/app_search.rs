@@ -125,12 +125,19 @@ pub mod windows {
             }
         }
 
-        // Scan Microsoft Store / UWP apps via Get-StartApps (shell:AppsFolder targets)
+        // Scan Microsoft Store / UWP apps via shell:AppsFolder enumeration
         if let Some(ref tx) = tx {
             let _ = tx.send((70, "正在扫描 Microsoft Store 应用...".to_string()));
         }
-        if let Ok(mut uwp_apps) = scan_uwp_apps() {
-            apps.append(&mut uwp_apps);
+        eprintln!("[scan_start_menu] Starting UWP apps scan...");
+        match scan_uwp_apps() {
+            Ok(mut uwp_apps) => {
+                eprintln!("[scan_start_menu] UWP scan succeeded: found {} apps", uwp_apps.len());
+                apps.append(&mut uwp_apps);
+            }
+            Err(e) => {
+                eprintln!("[scan_start_menu] UWP scan failed: {}", e);
+            }
         }
 
         if let Some(ref tx) = tx {
@@ -324,7 +331,8 @@ pub mod windows {
         app_id: String,
     }
 
-    /// Enumerate Microsoft Store / UWP apps using PowerShell Get-StartApps.
+    /// Enumerate Microsoft Store / UWP apps by directly enumerating shell:AppsFolder.
+    /// This method finds ALL apps in shell:AppsFolder, not just those returned by Get-StartApps.
     /// Produces shell:AppsFolder targets so they can be launched via ShellExecute.
     fn scan_uwp_apps() -> Result<Vec<AppInfo>, String> {
         fn decode_powershell_output(bytes: &[u8]) -> Result<String, String> {
@@ -350,13 +358,44 @@ pub mod windows {
                 .map_err(|e| format!("Failed to decode PowerShell output: {}", e))
         }
 
-        // PowerShell script: list Name/AppID and convert to JSON
+        // PowerShell script: directly enumerate shell:AppsFolder to get ALL apps
         let script = r#"
         try {
-            $apps = Get-StartApps | Where-Object { $_.AppId -and $_.Name }
+            $shell = New-Object -ComObject Shell.Application
+            $appsFolder = $shell.NameSpace("shell:AppsFolder")
+            
+            if ($appsFolder -eq $null) {
+                Write-Error "Failed to open shell:AppsFolder"
+                exit 1
+            }
+            
+            $apps = @()
+            foreach ($item in $appsFolder.Items()) {
+                if ($item -ne $null -and $item.Path -and $item.Name) {
+                    # Extract AppID from path (format: shell:AppsFolder\AppID)
+                    $appId = $null
+                    if ($item.Path -match 'shell:AppsFolder\\(.+)') {
+                        $appId = $matches[1]
+                    } elseif ($item.Path -match 'shell:appsfolder\\(.+)') {
+                        $appId = $matches[1]
+                    } else {
+                        # If path doesn't match expected format, try to use the full path
+                        $appId = $item.Path -replace '^shell:AppsFolder\\', '' -replace '^shell:appsfolder\\', ''
+                    }
+                    
+                    if ($appId -and $item.Name) {
+                        $apps += @{
+                            Name = $item.Name
+                            AppId = $appId
+                        }
+                    }
+                }
+            }
+            
             $apps | Select-Object Name, AppId | ConvertTo-Json -Depth 3
         } catch {
             Write-Error $_
+            exit 1
         }
         "#;
 
@@ -370,27 +409,63 @@ pub mod windows {
             .output()
             .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
 
+        eprintln!("[scan_uwp_apps] PowerShell exit code: {}", output.status.code().unwrap_or(-1));
+
         if !output.status.success() {
             let stderr = decode_powershell_output(&output.stderr)?;
-            return Err(format!("PowerShell Get-StartApps failed: {}", stderr));
+            let stdout = decode_powershell_output(&output.stdout)?;
+            eprintln!("[scan_uwp_apps] PowerShell failed - stderr: {}", stderr);
+            eprintln!("[scan_uwp_apps] PowerShell failed - stdout: {}", stdout);
+            return Err(format!("PowerShell shell:AppsFolder enumeration failed: {}", stderr));
         }
 
         let stdout = decode_powershell_output(&output.stdout)?;
         let stdout_trimmed = stdout.trim();
+        eprintln!("[scan_uwp_apps] PowerShell stdout length: {} bytes", stdout_trimmed.len());
+        
         if stdout_trimmed.is_empty() {
+            eprintln!("[scan_uwp_apps] PowerShell returned empty output");
             return Ok(Vec::new());
         }
 
+        // 打印前 500 个字符用于调试
+        let preview = if stdout_trimmed.len() > 500 {
+            format!("{}...", &stdout_trimmed[..500])
+        } else {
+            stdout_trimmed.to_string()
+        };
+        eprintln!("[scan_uwp_apps] PowerShell output preview: {}", preview);
+
         // Handle both array and single-object JSON outputs
-        let entries: Vec<StartAppEntry> = serde_json::from_str(stdout_trimmed)
-            .or_else(|_| serde_json::from_str::<StartAppEntry>(stdout_trimmed).map(|e| vec![e]))
-            .map_err(|e| format!("Failed to parse Get-StartApps JSON: {}", e))?;
+        let entries: Vec<StartAppEntry> = match serde_json::from_str(stdout_trimmed) {
+            Ok(entries) => entries,
+            Err(e) => {
+                // Try parsing as single object
+                match serde_json::from_str::<StartAppEntry>(stdout_trimmed) {
+                    Ok(entry) => vec![entry],
+                    Err(e2) => {
+                        eprintln!("[scan_uwp_apps] Failed to parse JSON: {} (also tried single object: {})", e, e2);
+                        return Err(format!("Failed to parse shell:AppsFolder JSON: {}", e));
+                    }
+                }
+            }
+        };
+
+        eprintln!("[scan_uwp_apps] Parsed {} entries from JSON", entries.len());
 
         let mut apps = Vec::with_capacity(entries.len());
-        for entry in entries {
+        for (idx, entry) in entries.iter().enumerate() {
             let name = entry.name.trim();
             let app_id = entry.app_id.trim();
+            
+            if idx < 10 {
+                eprintln!("[scan_uwp_apps] Entry {}: name='{}', app_id='{}'", idx, name, app_id);
+            }
+            
             if name.is_empty() || app_id.is_empty() {
+                if idx < 10 {
+                    eprintln!("[scan_uwp_apps] Entry {} skipped: empty name or app_id", idx);
+                }
                 continue;
             }
 
@@ -415,6 +490,7 @@ pub mod windows {
             });
         }
 
+        eprintln!("[scan_uwp_apps] Successfully created {} apps", apps.len());
         Ok(apps)
     }
 

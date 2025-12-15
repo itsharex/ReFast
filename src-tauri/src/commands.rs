@@ -1210,12 +1210,10 @@ pub async fn search_file_history(
 pub fn get_all_file_history(
     app: tauri::AppHandle,
 ) -> Result<Vec<file_history::FileHistoryItem>, String> {
-    println!("[后端] get_all_file_history: START");
     let start_time = std::time::Instant::now();
 
     let app_data_dir = match get_app_data_dir(&app) {
         Ok(dir) => {
-            println!("[后端] get_all_file_history: App data dir = {:?}", dir);
             dir
         }
         Err(e) => {
@@ -1230,10 +1228,8 @@ pub fn get_all_file_history(
     // CRITICAL: Lock only once, then do all operations within the lock
     // This prevents nested locking and potential deadlocks
     // 使用写锁，因为需要调用 load_history_into（需要可变引用）
-    println!("[后端] get_all_file_history: Acquiring lock...");
     let mut state = match file_history::lock_history_write() {
         Ok(guard) => {
-            println!("[后端] get_all_file_history: Lock acquired successfully");
             guard
         }
         Err(e) => {
@@ -1243,7 +1239,6 @@ pub fn get_all_file_history(
     };
 
     // Load history into the locked state (no additional locking)
-    println!("[后端] get_all_file_history: Loading history from disk...");
     match file_history::load_history_into(&mut state, &app_data_dir) {
         Ok(_) => {
             println!(
@@ -1772,12 +1767,6 @@ pub async fn start_everything_search_session(
 
         let search_response = result.map_err(|e| e.to_string())?;
 
-        // 调试日志：记录搜索响应
-        eprintln!(
-            "[RUST] start_everything_search_session: query='{}', max_results={}, returned={}, total_count={}",
-            combined_query_for_session, max_results, search_response.results.len(), search_response.total_count
-        );
-
         // 对结果进行排序（如果需要）
         let mut results = search_response.results;
         if let Some(sort_key) = opts.and_then(|o| o.sort_key.as_ref()) {
@@ -1857,11 +1846,6 @@ pub async fn start_everything_search_session(
             total_count: search_response.total_count,
             created_at: std::time::Instant::now(),
         };
-        
-        eprintln!(
-            "[RUST] start_everything_search_session: 会话创建完成，存储了 {} 条结果，总数: {}",
-            session.results.len(), session.total_count
-        );
 
         {
             let mut manager = SEARCH_SESSION_MANAGER

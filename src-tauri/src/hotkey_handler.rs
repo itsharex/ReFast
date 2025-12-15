@@ -1245,7 +1245,6 @@ pub mod windows {
             hotkeys_guard.insert(plugin_id.clone(), config);
         }
         
-        eprintln!("[MultiHotkey] Updated {} plugin hotkeys", hotkeys_guard.len());
         Ok(())
     }
     
