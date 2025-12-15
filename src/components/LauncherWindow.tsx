@@ -1310,15 +1310,8 @@ export function LauncherWindow() {
       fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1268',message:'debounce 回调执行',data:{query:trimmedQuery,debounceWaitTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
       // #endregion
       
-      console.log("[搜索调试] setTimeout执行，防抖结束");
       // 再次检查查询是否仍然有效（可能在防抖期间已被清空或改变）
       const currentQuery = query.trim();
-      console.log("[搜索调试] setTimeout查询检查:", {
-        currentQuery,
-        trimmedQuery,
-        queryChanged: currentQuery !== trimmedQuery,
-        isEmpty: currentQuery === ""
-      });
       if (currentQuery === "" || currentQuery !== trimmedQuery) {
         console.log("[搜索调试] ✗ 查询已改变或为空，取消搜索");
         return;
@@ -1330,18 +1323,6 @@ export function LauncherWindow() {
       const hasActiveSession = pendingSessionIdRef.current && currentSearchQueryRef.current === trimmedQuery;
       const hasResults = filteredApps.length > 0 || filteredFiles.length > 0 || filteredMemos.length > 0 || 
                          filteredPlugins.length > 0 || everythingResults.length > 0;
-      
-      console.log("[搜索调试] 会话检查:", {
-        hasActiveSession,
-        currentSearchQuery: currentSearchQueryRef.current,
-        trimmedQuery,
-        hasResults,
-        filteredApps: filteredApps.length,
-        filteredFiles: filteredFiles.length,
-        filteredMemos: filteredMemos.length,
-        filteredPlugins: filteredPlugins.length,
-        everythingResults: everythingResults.length,
-      });
       
       // 如果已有相同查询的活跃会话且有结果，跳过重复搜索
       if (hasActiveSession && hasResults) {
@@ -1798,7 +1779,7 @@ export function LauncherWindow() {
         };
       }),
       // 从文件历史记录中分离可执行文件
-      ...filteredFiles
+      ...(filteredFiles
         .filter((file) => {
           const pathLower = file.path.toLowerCase();
           // 过滤掉 WindowsApps 路径
@@ -1837,7 +1818,7 @@ export function LauncherWindow() {
           },
           displayName: file.name,
           path: file.path,
-        })),
+        }))),
       // 普通文件（非可执行文件）
       ...filteredFiles
         .filter((file) => {
@@ -1978,6 +1959,20 @@ export function LauncherWindow() {
     // 使用去重后的结果
     otherResults = deduplicatedResults;
     
+    // 统计最终结果列表中的应用数量（包括来自 filteredApps 和 filteredFiles 的应用）
+    const finalAppResults = otherResults.filter(r => r.type === "app");
+    const appsFromFilteredFiles = filteredFiles.filter(f => {
+      const pathLower = f.path.toLowerCase();
+      return (pathLower.endsWith('.exe') || pathLower.endsWith('.lnk')) && 
+             !pathLower.includes("windowsapps");
+    });
+    console.log("[启动器搜索] 最终结果列表中的应用统计:", {
+      搜索词: query,
+      来自filteredApps: filteredApps.length,
+      来自filteredFiles的可执行文件: appsFromFilteredFiles.length,
+      最终应用结果总数: finalAppResults.length,
+      最终应用结果: finalAppResults.map(r => ({ name: r.displayName, path: r.path }))
+    });
     
     // 使用相关性评分系统对所有结果进行排序
     // 性能优化：当结果数量过多时，只对前1000条进行排序，避免对大量结果排序造成卡顿
@@ -2466,7 +2461,6 @@ export function LauncherWindow() {
         setSelectedVerticalIndex,
         horizontalResultsRef,
         currentLoadResultsRef,
-        logMessage: '[horizontalResults] 清空横向结果 (结果为空)',
       });
       return;
     }
