@@ -185,6 +185,16 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     };
   };
 
+  // 超时保护辅助函数
+  const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+      ),
+    ]);
+  };
+
   const loadUsersCount = useCallback(
     async (fromOverride?: string, toOverride?: string) => {
       setIsLoadingUsersCount(true);
@@ -340,7 +350,12 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     try {
       setIsLoadingIndex(true);
       setIndexError(null);
-      const data = await tauriApi.getIndexStatus();
+      // 添加超时保护：8秒超时
+      const data = await withTimeout(
+        tauriApi.getIndexStatus(),
+        8000,
+        "获取索引状态超时，请重试"
+      );
       setIndexStatus(data);
     } catch (error: any) {
       console.error("获取索引状态失败:", error);
@@ -353,13 +368,37 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const loadFileHistoryList = async () => {
     try {
       setIsLoadingHistory(true);
-      const list = await tauriApi.getAllFileHistory();
+      // 添加超时保护：15秒超时（文件历史可能数据量大）
+      const list = await withTimeout(
+        tauriApi.getAllFileHistory(),
+        15000,
+        "加载文件历史超时，数据量可能较大，请稍后重试"
+      );
       // 后端已按时间排序，但这里再保险按 last_used 降序
-      const sorted = [...list].sort((a, b) => b.last_used - a.last_used);
-      setFileHistoryItems(sorted);
+      // 使用 requestIdleCallback 优化大数组排序，避免阻塞 UI
+      if (list.length > 10000) {
+        // 数据量大时，分批处理排序
+        const sorted = await new Promise<FileHistoryItem[]>((resolve) => {
+          const worker = () => {
+            const sorted = [...list].sort((a, b) => b.last_used - a.last_used);
+            resolve(sorted);
+          };
+          if (window.requestIdleCallback) {
+            window.requestIdleCallback(worker, { timeout: 1000 });
+          } else {
+            setTimeout(worker, 0);
+          }
+        });
+        setFileHistoryItems(sorted);
+      } else {
+        const sorted = [...list].sort((a, b) => b.last_used - a.last_used);
+        setFileHistoryItems(sorted);
+      }
     } catch (error: any) {
       console.error("加载文件历史失败:", error);
       setIndexError(error?.message || "加载文件历史失败");
+      // 即使失败也设置空数组，避免 UI 显示异常
+      setFileHistoryItems([]);
     } finally {
       setIsLoadingHistory(false);
     }
@@ -369,12 +408,19 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     try {
       setIsLoadingBackups(true);
       setBackupError(null);
-      const result = await tauriApi.getDatabaseBackups();
+      // 添加超时保护：10秒超时
+      const result = await withTimeout(
+        tauriApi.getDatabaseBackups(),
+        10000,
+        "获取备份列表超时，请重试"
+      );
       setBackupDir(result.dir);
       setBackupList(result.items);
     } catch (error: any) {
       console.error("获取备份列表失败:", error);
       setBackupError(error?.message || "获取备份列表失败");
+      // 即使失败也设置空数组
+      setBackupList([]);
     } finally {
       setIsLoadingBackups(false);
     }
@@ -999,20 +1045,42 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   // 加载应用快捷键
   const loadAppHotkeys = useCallback(async () => {
     try {
-      const hotkeys = await tauriApi.getAppHotkeys();
+      // 添加超时保护：5秒超时（这个操作通常很快）
+      const hotkeys = await withTimeout(
+        tauriApi.getAppHotkeys(),
+        5000,
+        "加载应用快捷键超时"
+      );
       setAppHotkeys(hotkeys);
     } catch (error) {
       console.error("Failed to load app hotkeys:", error);
+      // 即使失败也设置空对象
+      setAppHotkeys({});
     }
   }, []);
 
   // 当切换到索引分类时加载索引状态和应用快捷键
   useEffect(() => {
     if (activeCategory === "index") {
-      fetchIndexStatus();
-      loadFileHistoryList();
-      loadBackupList();
-      loadAppHotkeys();
+      // 优化加载顺序：先加载轻量数据，再加载重量数据
+      // 1. 先加载轻量数据（快速响应）
+      void loadAppHotkeys();
+      void fetchIndexStatus();
+      
+      // 2. 延迟加载重量数据（避免阻塞 UI）
+      // 使用 setTimeout 让 UI 先渲染，再加载数据
+      const timer1 = setTimeout(() => {
+        void loadBackupList();
+      }, 100);
+      
+      const timer2 = setTimeout(() => {
+        void loadFileHistoryList();
+      }, 200);
+      
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+      };
     }
   }, [activeCategory, loadAppHotkeys]);
 
