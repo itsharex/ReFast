@@ -1738,7 +1738,7 @@ try {
 
     // 使用 IShellItemImageFactory 提取图标（优先方案）
     // 直接从 Shell 获取已合成的带 alpha 通道的位图
-    fn extract_icon_png_via_shell(file_path: &Path, size: u32) -> Option<String> {
+    pub fn extract_icon_png_via_shell(file_path: &Path, size: u32) -> Option<String> {
         use ::windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF};
         use ::windows::Win32::Graphics::Gdi::{DeleteObject, HGDIOBJ};
         use ::windows::core::PCWSTR;

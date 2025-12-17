@@ -4465,12 +4465,23 @@ export function LauncherWindow() {
 
   const handleLaunch = async (result: SearchResult) => {
     try {
-      // Record open history for all types (but delay updating state to avoid reordering during animation)
+      // Record open history for all types
       try {
         void tauriApi.recordOpenHistory(result.path);
-        // Don't update local state immediately to prevent list reordering during animation
       } catch (error) {
         console.error("Failed to record open history:", error);
+      }
+      
+      // 立即更新 openHistory 状态和文件历史缓存
+      const pathToUpdate = result.path;
+      const timestampToUpdate = Date.now() / 1000;
+      
+      // 立即更新 openHistory 状态（用于排序和显示）
+      if (pathToUpdate) {
+        setOpenHistory(prev => ({
+          ...prev,
+          [pathToUpdate]: timestampToUpdate,
+        }));
       }
       
       // 对于应用类型，同时更新 file_history 表（用于使用频率统计）
@@ -4480,17 +4491,39 @@ export function LauncherWindow() {
         const isRealFilePath = pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
         if (isRealFilePath) {
           try {
-            // 异步更新，不阻塞应用启动
+            // 立即更新前端文件历史缓存（乐观更新）
+            const normalizedPath = result.path.trim().replace(/[\\/]+$/, '');
+            const existingItem = allFileHistoryCacheRef.current.find(item => item.path === normalizedPath);
+            if (existingItem) {
+              // 更新现有项
+              existingItem.last_used = timestampToUpdate;
+              existingItem.use_count += 1;
+            } else {
+              // 添加新项（如果路径存在）
+              const name = normalizedPath.split(/[\\/]/).pop() || normalizedPath;
+              allFileHistoryCacheRef.current.push({
+                path: normalizedPath,
+                name,
+                last_used: timestampToUpdate,
+                use_count: 1,
+                is_folder: undefined,
+              });
+            }
+            allFileHistoryCacheLoadedRef.current = true;
+            
+            // 异步更新后端数据库，不阻塞应用启动
             console.log(`[应用打开] 准备更新 file_history: ${result.path}`);
             void tauriApi.addFileToHistory(result.path)
               .then(() => {
                 console.log(`[应用打开] ✓ 成功更新 file_history: ${result.path}`);
-                // 刷新文件历史缓存，确保下次搜索时能获取到最新的使用频率数据
+                // 刷新文件历史缓存以确保与数据库同步（作为后备）
                 void refreshFileHistoryCache();
               })
               .catch((error) => {
                 // 如果路径不存在或其他错误，记录警告（不影响应用启动）
                 console.warn(`[应用打开] ✗ 更新 file_history 失败: ${result.path}`, error);
+                // 如果后端更新失败，回滚前端缓存（重新从数据库加载）
+                void refreshFileHistoryCache();
               });
           } catch (error) {
             console.warn(`[应用打开] ✗ 更新 file_history 异常: ${result.path}`, error);
@@ -4499,10 +4532,6 @@ export function LauncherWindow() {
           console.log(`[应用打开] 跳过 file_history 更新（UWP 应用路径）: ${result.path}`);
         }
       }
-
-      // Store the path and timestamp for later state update (after animation)
-      const pathToUpdate = result.path;
-      const timestampToUpdate = Date.now() / 1000;
 
       if (result.type === "ai" && result.aiAnswer) {
         // AI 回答点击时，可以复制到剪贴板或什么都不做
@@ -4582,31 +4611,14 @@ export function LauncherWindow() {
           await tauriApi.launchApplication(result.app);
           trackEvent("app_launched", { name: result.app.name });
           
-          // 注意：file_history 的更新已经在 handleLaunch 开头处理了，这里不需要重复刷新
-          
-          // 动画完成后，更新本地历史状态（此时启动器即将关闭，不会影响列表顺序）
-          if (pathToUpdate) {
-            setOpenHistory(prev => ({
-              ...prev,
-              [pathToUpdate]: timestampToUpdate,
-            }));
-          }
+          // 注意：openHistory 和 file_history 的更新已经在 handleLaunch 开头处理了，这里不需要重复更新
           
           // 清除启动状态
           setLaunchingAppPath(null);
         } catch (launchError: any) {
           // 如果启动失败，清除启动状态
           setLaunchingAppPath(null);
-          // 即使启动失败，也更新历史记录（因为用户确实尝试打开了）
-          // 刷新文件历史缓存，确保下次搜索时能获取到最新的使用频率数据
-          void refreshFileHistoryCache();
-          
-          if (pathToUpdate) {
-            setOpenHistory(prev => ({
-              ...prev,
-              [pathToUpdate]: timestampToUpdate,
-            }));
-          }
+          // 注意：openHistory 和 file_history 的更新已经在 handleLaunch 开头处理了，这里不需要重复更新
           const errorMsg = launchError?.message || launchError?.toString() || "";
           // 检测是否是文件不存在的错误，自动删除索引
           if (
@@ -4642,27 +4654,52 @@ export function LauncherWindow() {
       } else if (result.type === "file" && result.file) {
         try {
           await tauriApi.launchFile(result.file.path);
+          
+          // 立即更新前端文件历史缓存（乐观更新）
+          const normalizedPath = result.file.path.trim().replace(/[\\/]+$/, '');
+          const existingItem = allFileHistoryCacheRef.current.find(item => item.path === normalizedPath);
+          if (existingItem) {
+            // 更新现有项的 last_used 时间
+            existingItem.last_used = timestampToUpdate;
+            existingItem.use_count += 1;
+          }
+          // 如果不存在，说明可能已经被删除，不需要添加
+          
+          // 异步更新后端数据库（如果文件存在）
+          const filePath = result.file.path;
+          void tauriApi.addFileToHistory(filePath)
+            .then(() => {
+              // 刷新文件历史缓存以确保与数据库同步（作为后备）
+              void refreshFileHistoryCache();
+            })
+            .catch((error) => {
+              // 如果路径不存在或其他错误，记录警告（不影响文件打开）
+              console.warn(`[文件打开] ✗ 更新 file_history 失败: ${filePath}`, error);
+            });
         } catch (fileError: any) {
           const errorMsg = fileError?.message || fileError?.toString() || "";
           // 检测是否是文件不存在的错误，自动删除历史记录
           if (errorMsg.includes("Path not found") || errorMsg.includes("not found")) {
-            try {
-              // 自动删除无效的历史记录
-              await tauriApi.deleteFileHistory(result.file.path);
-              // 刷新文件历史缓存
-              await refreshFileHistoryCache();
-              // 重新搜索以更新结果列表
-              if (query.trim()) {
-                await searchFileHistory(query);
-              } else {
-                await searchFileHistory("");
+            const filePath = result.file?.path;
+            if (filePath) {
+              try {
+                // 自动删除无效的历史记录
+                await tauriApi.deleteFileHistory(filePath);
+                // 刷新文件历史缓存
+                await refreshFileHistoryCache();
+                // 重新搜索以更新结果列表
+                if (query.trim()) {
+                  await searchFileHistory(query);
+                } else {
+                  await searchFileHistory("");
+                }
+                // 显示提示信息
+                setErrorMessage(`文件不存在：${filePath}\n\n已自动从历史记录中删除该文件。`);
+              } catch (deleteError: any) {
+                console.error("Failed to delete file history:", deleteError);
+                // 如果删除失败，仍然显示原始错误
+                setErrorMessage(`文件不存在：${filePath}\n\n错误：${errorMsg}`);
               }
-              // 显示提示信息
-              setErrorMessage(`文件不存在：${result.file.path}\n\n已自动从历史记录中删除该文件。`);
-            } catch (deleteError: any) {
-              console.error("Failed to delete file history:", deleteError);
-              // 如果删除失败，仍然显示原始错误
-              setErrorMessage(`文件不存在：${result.file.path}\n\n错误：${errorMsg}`);
             }
             return; // 不继续执行后续的 hideLauncherAndResetState
           } else {
@@ -4674,14 +4711,45 @@ export function LauncherWindow() {
         // Launch Everything result and add to file history
         try {
           await tauriApi.launchFile(result.everything.path);
-          await tauriApi.addFileToHistory(result.everything.path);
-          // 更新前端缓存
-          await refreshFileHistoryCache();
+          
+          // 立即更新前端文件历史缓存（乐观更新）
+          const everythingPath = result.everything.path;
+          const normalizedPath = everythingPath.trim().replace(/[\\/]+$/, '');
+          const existingItem = allFileHistoryCacheRef.current.find(item => item.path === normalizedPath);
+          if (existingItem) {
+            // 更新现有项
+            existingItem.last_used = timestampToUpdate;
+            existingItem.use_count += 1;
+          } else {
+            // 添加新项
+            const name = normalizedPath.split(/[\\/]/).pop() || normalizedPath;
+            allFileHistoryCacheRef.current.push({
+              path: normalizedPath,
+              name,
+              last_used: timestampToUpdate,
+              use_count: 1,
+              is_folder: undefined,
+            });
+          }
+          allFileHistoryCacheLoadedRef.current = true;
+          
+          // 异步更新后端数据库
+          void tauriApi.addFileToHistory(everythingPath)
+            .then(() => {
+              // 刷新文件历史缓存以确保与数据库同步（作为后备）
+              void refreshFileHistoryCache();
+            })
+            .catch((error) => {
+              console.warn(`[Everything 文件打开] ✗ 更新 file_history 失败: ${everythingPath}`, error);
+              // 如果后端更新失败，回滚前端缓存（重新从数据库加载）
+              void refreshFileHistoryCache();
+            });
         } catch (fileError: any) {
           const errorMsg = fileError?.message || fileError?.toString() || "";
           // 检测是否是文件不存在的错误
           if (errorMsg.includes("Path not found") || errorMsg.includes("not found")) {
-            setErrorMessage(`文件不存在：${result.everything.path}`);
+            const everythingPath = result.everything?.path || "未知路径";
+            setErrorMessage(`文件不存在：${everythingPath}`);
             return; // 不继续执行后续的 hideLauncherAndResetState
           } else {
             // 其他错误，正常显示
@@ -4725,14 +4793,7 @@ export function LauncherWindow() {
         return;
       }
       
-      // 对于非应用类型，在启动器关闭前更新历史记录状态
-      // 应用类型已经在动画完成后更新了，这里跳过
-      if (result.type !== "app" && pathToUpdate) {
-        setOpenHistory(prev => ({
-          ...prev,
-          [pathToUpdate]: timestampToUpdate,
-        }));
-      }
+      // 注意：openHistory 的更新已经在 handleLaunch 开头处理了，这里不需要重复更新
       
       // Hide launcher window after launch
       await hideLauncherAndResetState();

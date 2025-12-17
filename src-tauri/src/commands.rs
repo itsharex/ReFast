@@ -1042,6 +1042,9 @@ pub async fn search_applications(
                         app_search::windows::extract_lnk_icon_base64(path)
                     } else if ext == Some("exe".to_string()) {
                         app_search::windows::extract_icon_base64(path)
+                    } else if ext == Some("msc".to_string()) {
+                        // .msc 文件（Microsoft Management Console）使用 Shell API 提取图标
+                        app_search::windows::extract_icon_png_via_shell(path, 32)
                     } else {
                         None
                     }
@@ -1169,6 +1172,9 @@ pub async fn populate_app_icons(
                     app_search::windows::extract_lnk_icon_base64(path)
                 } else if ext == Some("exe".to_string()) {
                     app_search::windows::extract_icon_base64(path)
+                } else if ext == Some("msc".to_string()) {
+                    // .msc 文件（Microsoft Management Console）使用 Shell API 提取图标
+                    app_search::windows::extract_icon_png_via_shell(path, 32)
                 } else {
                     None
                 }
@@ -1296,6 +1302,9 @@ pub async fn debug_app_icon(app_name: String, _app: tauri::AppHandle) -> Result<
                     app_search::windows::extract_lnk_icon_base64(path)
                 } else if ext == Some("exe".to_string()) {
                     app_search::windows::extract_icon_base64(path)
+                } else if ext == Some("msc".to_string()) {
+                    // .msc 文件（Microsoft Management Console）使用 Shell API 提取图标
+                    app_search::windows::extract_icon_png_via_shell(path, 32)
                 } else {
                     None
                 };
@@ -1381,6 +1390,9 @@ pub async fn extract_icon_from_path(file_path: String, app: tauri::AppHandle) ->
                 app_search::windows::extract_lnk_icon_base64(path)
             } else if ext == Some("exe".to_string()) {
                 app_search::windows::extract_icon_base64(path)
+            } else if ext == Some("msc".to_string()) {
+                // .msc 文件（Microsoft Management Console）使用 Shell API 提取图标
+                app_search::windows::extract_icon_png_via_shell(path, 32)
             } else {
                 None
             }
@@ -1569,12 +1581,21 @@ pub async fn test_all_icon_extraction_methods(file_path: String) -> Result<Vec<(
         } else if ext == Some("exe".to_string()) {
             // 对于 .exe 文件，使用与应用索引列表完全相同的提取逻辑
             let mut results = Vec::new();
-            
+
             // 实际使用的方法（与应用索引列表完全一致）
             // 这是应用索引列表使用的唯一方法
             let actual_result = app_search::windows::extract_icon_base64(path);
             results.push(("实际使用的方法 (extract_icon_base64)".to_string(), actual_result));
-            
+
+            Ok(results)
+        } else if ext == Some("msc".to_string()) {
+            // 对于 .msc 文件，使用 Shell API 提取图标
+            let mut results = Vec::new();
+
+            // 实际使用的方法
+            let actual_result = app_search::windows::extract_icon_png_via_shell(path, 32);
+            results.push(("实际使用的方法 (extract_icon_png_via_shell)".to_string(), actual_result));
+
             Ok(results)
         } else {
             Err(format!("不支持的文件类型: {:?}", ext))

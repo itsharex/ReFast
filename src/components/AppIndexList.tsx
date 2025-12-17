@@ -32,6 +32,9 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
   const [appIndexProgress, setAppIndexProgress] = useState<{ progress: number; message: string } | null>(null);
   const [extractingIcons, setExtractingIcons] = useState<Set<string>>(new Set());
   
+  // 图标筛选类型：'all' | 'withIcon' | 'withoutIcon'
+  const [iconFilter, setIconFilter] = useState<'all' | 'withIcon' | 'withoutIcon'>('all');
+  
   // 批量提取图标相关状态
   const [isBatchExtracting, setIsBatchExtracting] = useState(false);
   const [batchExtractProgress, setBatchExtractProgress] = useState<{
@@ -575,22 +578,31 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
     return () => window.removeEventListener("keydown", handleEscape, true);
   }, [recordingAppPath, isOpen]);
 
-  // 筛选应用列表
+  // 筛选应用列表（包含搜索和图标筛选）
   const filteredAppIndexList = useMemo(() => {
-    if (!appIndexSearch.trim()) {
-      console.log("[应用结果列表] 无搜索条件，返回全部列表，数量:", appIndexList.length);
-      return appIndexList;
+    let filtered = appIndexList;
+    
+    // 先应用搜索筛选
+    if (appIndexSearch.trim()) {
+      const query = appIndexSearch.toLowerCase();
+      filtered = filtered.filter(
+        (item) =>
+          item.name.toLowerCase().includes(query) ||
+          item.path.toLowerCase().includes(query)
+      );
     }
-    const query = appIndexSearch.toLowerCase();
-    const filtered = appIndexList.filter(
-      (item) =>
-        item.name.toLowerCase().includes(query) ||
-        item.path.toLowerCase().includes(query)
-    );
-    console.log("[应用结果列表] 筛选结果 - 搜索词:", appIndexSearch, "原始数量:", appIndexList.length, "筛选后数量:", filtered.length);
-    console.log("[应用结果列表] 筛选后的应用:", filtered);
+    
+    // 再应用图标筛选
+    if (iconFilter === 'withIcon') {
+      filtered = filtered.filter(item => isValidIcon(item.icon));
+    } else if (iconFilter === 'withoutIcon') {
+      filtered = filtered.filter(item => !isValidIcon(item.icon));
+    }
+    // iconFilter === 'all' 时不过滤
+    
+    console.log("[应用结果列表] 筛选结果 - 搜索词:", appIndexSearch, "图标筛选:", iconFilter, "原始数量:", appIndexList.length, "筛选后数量:", filtered.length);
     return filtered;
-  }, [appIndexList, appIndexSearch]);
+  }, [appIndexList, appIndexSearch, iconFilter]);
 
   // 计算图标统计信息
   const iconStats = useMemo(() => {
@@ -713,6 +725,38 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
               >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
+            </div>
+            <div className="flex items-center gap-2 border border-gray-200 rounded-lg p-0.5 bg-gray-50">
+              <button
+                onClick={() => setIconFilter('all')}
+                className={`px-3 py-1.5 text-xs rounded-md transition ${
+                  iconFilter === 'all'
+                    ? 'bg-white text-gray-900 shadow-sm font-medium'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                全部
+              </button>
+              <button
+                onClick={() => setIconFilter('withIcon')}
+                className={`px-3 py-1.5 text-xs rounded-md transition ${
+                  iconFilter === 'withIcon'
+                    ? 'bg-white text-green-700 shadow-sm font-medium'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                有图标
+              </button>
+              <button
+                onClick={() => setIconFilter('withoutIcon')}
+                className={`px-3 py-1.5 text-xs rounded-md transition ${
+                  iconFilter === 'withoutIcon'
+                    ? 'bg-white text-orange-700 shadow-sm font-medium'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                无图标
+              </button>
             </div>
             {appIndexSearch && (
               <button
