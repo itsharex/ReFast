@@ -1784,12 +1784,60 @@ export function LauncherWindow() {
           return pathLower.endsWith('.exe') || pathLower.endsWith('.lnk');
         })
         .filter((file) => {
-          // 检查是否已经在 filteredApps 中，如果已存在则过滤掉（使用标准化路径比较）
+          // 检查是否已经在 filteredApps 中，如果已存在则过滤掉
+          // 不仅要检查路径完全相同，还要检查 .lnk 文件是否指向已存在的 .exe 文件
           const normalizedFilePath = file.path.toLowerCase().replace(/\\/g, "/");
-          return !filteredApps.some(app => {
+          const filePathLower = file.path.toLowerCase();
+          
+          // 首先检查是否有完全相同的路径
+          const hasExactMatch = filteredApps.some(app => {
             const normalizedAppPath = app.path.toLowerCase().replace(/\\/g, "/");
             return normalizedAppPath === normalizedFilePath;
           });
+          if (hasExactMatch) return false;
+          
+          // 如果是 .lnk 文件，检查是否有对应的 .exe 文件在 filteredApps 中
+          if (filePathLower.endsWith('.lnk')) {
+            // 提取 .lnk 文件的关键信息用于匹配
+            // 策略：提取路径中的公司目录和产品名称，检查是否有 .exe 文件包含这些信息
+            const lnkNormalized = normalizedFilePath;
+            
+            // 查找 "programs/" 之后的目录结构
+            const programsIdx = lnkNormalized.indexOf("/programs/");
+            if (programsIdx !== -1) {
+              const afterPrograms = lnkNormalized.substring(programsIdx + "/programs/".length);
+              const productPart = afterPrograms.replace(/\.lnk$/, "");
+              
+              // 提取公司目录和产品名称
+              const slashIdx = productPart.indexOf('/');
+              if (slashIdx !== -1) {
+                const companyDir = productPart.substring(0, slashIdx);
+                const productName = productPart.substring(slashIdx + 1);
+                
+                // 检查 filteredApps 中是否有 .exe 文件包含这些信息
+                const hasMatchingExe = filteredApps.some(app => {
+                  const appPathLower = app.path.toLowerCase().replace(/\\/g, "/");
+                  if (!appPathLower.endsWith('.exe')) return false;
+                  // 检查 .exe 路径是否同时包含公司目录和产品名称
+                  return appPathLower.includes(companyDir) && appPathLower.includes(productName);
+                });
+                if (hasMatchingExe) return false;
+              } else {
+                // 单层目录结构，检查名称匹配
+                const companyOrProduct = productPart;
+                const lnkNameLower = file.name.toLowerCase().replace(/\.lnk$/, "");
+                const hasMatchingExe = filteredApps.some(app => {
+                  const appPathLower = app.path.toLowerCase().replace(/\\/g, "/");
+                  if (!appPathLower.endsWith('.exe')) return false;
+                  // 检查路径包含目录名，且路径包含 .lnk 名称的核心部分
+                  return appPathLower.includes(companyOrProduct) && appPathLower.includes(lnkNameLower);
+                });
+                if (hasMatchingExe) return false;
+              }
+            }
+          }
+          
+          return true;
         })
         // 在 filteredFiles 内部去重：对于 .lnk 文件，检查是否存在对应的 .exe 文件
         // 优先保留 .exe 文件，如果 .lnk 文件指向相同的应用，则过滤掉 .lnk
@@ -2038,7 +2086,52 @@ export function LauncherWindow() {
     otherResults = deduplicatedResults;
     
     // 统计最终结果列表中的应用数量（包括来自 filteredApps 和 filteredFiles 的应用）
-    const finalAppResults = otherResults.filter(r => r.type === "app");
+    let finalAppResults = otherResults.filter(r => r.type === "app");
+    
+    // 对最终应用结果按名称去重：如果多个应用名称相同，优先保留 .exe 文件
+    const seenFinalAppNames = new Set<string>();
+    const deduplicatedAppResults = finalAppResults.reduce((acc: typeof finalAppResults, app) => {
+      const normalizedName = normalizeAppName(app.displayName || app.path.split(/[\\/]/).pop() || "");
+      const pathLower = app.path.toLowerCase();
+      const isExe = pathLower.endsWith('.exe');
+      
+      if (!seenFinalAppNames.has(normalizedName)) {
+        // 第一次遇到这个名称，直接添加
+        seenFinalAppNames.add(normalizedName);
+        acc.push(app);
+      } else {
+        // 已经存在同名应用，检查是否应该替换
+        const existingIndex = acc.findIndex(existing => {
+          const existingNormalizedName = normalizeAppName(existing.displayName || existing.path.split(/[\\/]/).pop() || "");
+          return existingNormalizedName === normalizedName;
+        });
+        
+        if (existingIndex !== -1) {
+          const existing = acc[existingIndex];
+          const existingPathLower = existing.path.toLowerCase();
+          const existingIsLnk = existingPathLower.endsWith('.lnk');
+          
+          // 如果当前是 .exe 而已存在的是 .lnk，替换它
+          if (isExe && existingIsLnk) {
+            acc[existingIndex] = app;
+          }
+          // 如果当前是 .lnk 而已存在的是 .exe，跳过（不替换）
+          // 其他情况保持原样（不添加）
+        }
+      }
+      
+      return acc;
+    }, []);
+    
+    // 将去重后的应用结果更新回 otherResults
+    // 移除原来的应用结果，然后添加去重后的应用结果
+    otherResults = [
+      ...otherResults.filter(r => r.type !== "app"),
+      ...deduplicatedAppResults
+    ];
+    
+    finalAppResults = deduplicatedAppResults;
+    
     const appsFromFilteredFiles = filteredFiles.filter(f => {
       const pathLower = f.path.toLowerCase();
       return (pathLower.endsWith('.exe') || pathLower.endsWith('.lnk')) && 

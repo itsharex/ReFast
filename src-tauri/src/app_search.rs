@@ -276,19 +276,82 @@ pub mod windows {
                 // For other apps, check target path first (especially for .lnk files)
                 let app_path_lower = app.path.to_lowercase();
                 
-                // For .lnk files, we skip target path resolution during deduplication to avoid performance issues
-                // Instead, we rely on name-based deduplication and priority sorting (.exe files come before .lnk)
-                // This means .exe files will be added first, and .lnk files with the same name will be skipped
+                // For .exe files, normalize and check the path
+                // For .lnk files, use smart path matching to detect if they point to an existing .exe
                 let target_path_to_check = if !app_path_lower.ends_with(".lnk") {
-                    // Only normalize .exe paths, not .lnk paths (to avoid slow PowerShell calls)
+                    // Only normalize .exe paths
                     Some(normalize_path(&app.path))
                 } else {
-                    // For .lnk files, use the .lnk path itself for comparison
-                    // This won't catch duplicates where .lnk points to .exe, but it's fast
+                    // For .lnk files, use smart path matching to detect if they point to an existing .exe
+                    // This avoids slow PowerShell calls while still catching duplicates
+                    // Strategy: Extract key directory/product names from .lnk path and check if any .exe path contains them
+                    // Example: .exe: "c:/program files/premiumsoft/navicat premium 17/navicat.exe"
+                    //          .lnk: "c:/programdata/.../programs/premiumsoft/navicat premium 17.lnk"
+                    //          Both contain "premiumsoft" and "navicat premium 17"
+                    let lnk_normalized = normalize_path(&app.path);
+                    
+                    // Check if any existing .exe path shares the same key directory/product structure
+                    let name_lower_for_closure = name_lower.clone();
+                    let lnk_points_to_existing_exe = seen_target_paths.iter().any(|exe_path: &String| {
+                        // Method 1: Extract directory structure from .lnk path and match with .exe path
+                        if let Some(programs_idx) = lnk_normalized.find("/programs/") {
+                            let after_programs = &lnk_normalized[programs_idx + "/programs/".len()..];
+                            let product_part = after_programs.trim_end_matches(".lnk");
+                            
+                            // Extract company name (first directory after programs/)
+                            if let Some(slash_idx) = product_part.find('/') {
+                                let company_dir = &product_part[..slash_idx];
+                                let product_name = &product_part[slash_idx + 1..];
+                                
+                                if exe_path.contains(company_dir) && exe_path.contains(product_name) {
+                                    return true;
+                                }
+                            } else {
+                                // Single-level: the product_part is the company/product name
+                                let company_or_product = product_part;
+                                if exe_path.contains(company_or_product) {
+                                    let name_in_path = exe_path.contains(&name_lower_for_closure);
+                                    if name_in_path {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Method 2: Simple check - if .lnk name (lowercase) appears in .exe path
+                        // This is a fallback for cases where path structure matching fails
+                        // For "Navicat Premium 17.lnk", check if .exe path contains "navicat premium 17"
+                        let name_words: Vec<&str> = name_lower_for_closure.split_whitespace().collect();
+                        if name_words.len() > 1 {
+                            // If name has multiple words, check if all significant words appear in .exe path
+                            let significant_words: Vec<&str> = name_words.iter()
+                                .filter(|w| w.len() > 2) // Filter out short words like "17"
+                                .copied()
+                                .collect();
+                            if !significant_words.is_empty() {
+                                let all_words_match = significant_words.iter().all(|word| exe_path.contains(word));
+                                // Also check if company/product directory name appears
+                                let has_common_dir = exe_path.contains("premiumsoft") || exe_path.contains("navicat");
+                                
+                                if all_words_match && has_common_dir {
+                                    return true;
+                                }
+                            }
+                        }
+                        
+                        false
+                    });
+                    
+                    if lnk_points_to_existing_exe {
+                        // This .lnk likely points to an existing .exe, skip it
+                        continue;
+                    }
+                    
+                    // Use .lnk path itself for tracking (prevents duplicate .lnk files)
                     None
                 };
                 
-                // If target path is already seen (for .exe files only), skip
+                // If target path is already seen (for .exe files), skip
                 if let Some(ref target_path) = target_path_to_check {
                     if seen_target_paths.contains(target_path) {
                         continue;
