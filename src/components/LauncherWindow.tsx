@@ -1336,16 +1336,7 @@ export function LauncherWindow() {
     }
     console.log("[搜索调试] ✗ 去重检查失败，进入防抖，防抖时间:", debounceTime, "ms");
     
-    // #region agent log - 记录 debounce 开始时间
-    const debounceStartTime = performance.now();
-    fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1266',message:'debounce 开始',data:{query:trimmedQuery,debounceTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-    // #endregion
-    
     const timeoutId = setTimeout(() => {
-      // #region agent log - 记录 debounce 回调执行时间
-      const debounceWaitTime = performance.now() - debounceStartTime;
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1268',message:'debounce 回调执行',data:{query:trimmedQuery,debounceWaitTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
       
       // 再次检查查询是否仍然有效（可能在防抖期间已被清空或改变）
       const currentQuery = query.trim();
@@ -1423,20 +1414,7 @@ export function LauncherWindow() {
         // Everything 搜索立即执行，不延迟
         if (isEverythingAvailable) {
           console.log("[搜索调试] 准备调用startSearchSession:", trimmedQuery);
-          // #region agent log - 记录 Everything 搜索开始时间
-          const everythingSearchStartTime = performance.now();
-          fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1372',message:'Everything 搜索开始',data:{query:trimmedQuery,timeSinceDebounce:everythingSearchStartTime-debounceStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-          // #endregion
-          startSearchSession(trimmedQuery).then(() => {
-            // #region agent log - 记录 Everything 搜索完成时间
-            const everythingSearchDuration = performance.now() - everythingSearchStartTime;
-            fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1376',message:'Everything 搜索完成',data:{query:trimmedQuery,everythingSearchDuration,timeSinceDebounce:performance.now()-debounceStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-            // #endregion
-          }).catch((error) => {
-            // #region agent log
-            const everythingSearchDuration = performance.now() - everythingSearchStartTime;
-            fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1390',message:'Everything 搜索错误',data:{query:trimmedQuery,everythingSearchDuration,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-            // #endregion
+          startSearchSession(trimmedQuery).catch((error) => {
             console.error("[搜索调试] startSearchSession错误:", error);
           });
         }
@@ -1444,23 +1422,10 @@ export function LauncherWindow() {
       
       // ========== 性能优化：并行执行所有搜索 ==========
       // 系统文件夹和文件历史搜索立即执行
-      // #region agent log - 记录并行搜索开始时间
-      const parallelSearchStartTime = performance.now();
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1383',message:'并行搜索开始',data:{query:trimmedQuery,timeSinceDebounce:parallelSearchStartTime-debounceStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
       Promise.all([
         searchSystemFolders(trimmedQuery),
         searchFileHistory(trimmedQuery),
-      ]).then(() => {
-        // #region agent log - 记录并行搜索完成时间
-        const parallelSearchDuration = performance.now() - parallelSearchStartTime;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1388',message:'并行搜索完成',data:{query:trimmedQuery,parallelSearchDuration,timeSinceDebounce:performance.now()-debounceStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-        // #endregion
-      }).catch((error) => {
-        // #region agent log
-        const parallelSearchDuration = performance.now() - parallelSearchStartTime;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1390',message:'并行搜索错误',data:{query:trimmedQuery,parallelSearchDuration,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-        // #endregion
+      ]).catch((error) => {
         console.error("[搜索错误] 并行搜索失败:", error);
       });
       
@@ -1477,18 +1442,8 @@ export function LauncherWindow() {
       });
       
       // 备忘录和插件搜索是纯前端过滤，立即执行（不会阻塞）
-      const memosPluginsStart = performance.now();
       searchMemos(trimmedQuery);
       handleSearchPlugins(trimmedQuery);
-      const memosPluginsDuration = performance.now() - memosPluginsStart;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1405',message:'备忘录和插件搜索完成',data:{memosPluginsDuration,timeSinceDebounce:performance.now()-debounceStartTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
-      
-      // #region agent log - 记录整个搜索流程的总时间
-      const totalSearchTime = performance.now() - debounceStartTime;
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:1410',message:'整个搜索流程完成（从debounce开始）',data:{query:trimmedQuery,totalSearchTime},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
     }, debounceTime) as unknown as number;
     
     debounceTimeoutRef.current = timeoutId;
@@ -3621,38 +3576,20 @@ export function LauncherWindow() {
 
   // 搜索系统文件夹（前端搜索，避免每次调用后端）
   const searchSystemFolders = async (searchQuery: string) => {
-    // #region agent log
-    const funcStart = performance.now();
-    fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3414',message:'searchSystemFolders 开始',data:{searchQuery},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-    // #endregion
-    
     try {
       if (!searchQuery || searchQuery.trim() === "") {
         setSystemFolders([]);
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3417',message:'searchSystemFolders 完成（空查询）',data:{funcDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-        // #endregion
         return;
       }
       
       // 如果列表未加载，先加载
       if (!systemFoldersListLoadedRef.current) {
-        // #region agent log
-        const loadStart = performance.now();
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3422',message:'searchSystemFolders 从后端加载开始',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-        // #endregion
         const folders = await tauriApi.searchSystemFolders("");
-        // #region agent log
-        const loadDuration = performance.now() - loadStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3424',message:'searchSystemFolders 从后端加载完成',data:{loadDuration,foldersCount:folders.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-        // #endregion
         systemFoldersListRef.current = folders;
         systemFoldersListLoadedRef.current = true;
       }
       
       // 前端搜索（支持拼音匹配）
-      const searchStart = performance.now();
       const queryLower = searchQuery.trim().toLowerCase();
       const queryIsPinyin = !containsChinese(queryLower);
       
@@ -3691,27 +3628,13 @@ export function LauncherWindow() {
         
         return false;
       });
-      const searchDuration = performance.now() - searchStart;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3430',message:'searchSystemFolders 前端搜索完成',data:{searchDuration,resultsCount:results.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
       
-      const updateStart = performance.now();
       if (query.trim() === searchQuery.trim()) {
         setSystemFolders(results);
       } else {
         setSystemFolders([]);
       }
-      const updateDuration = performance.now() - updateStart;
-      // #region agent log
-      const funcDuration = performance.now() - funcStart;
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3440',message:'searchSystemFolders 完成',data:{funcDuration,updateDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
     } catch (error) {
-      // #region agent log
-      const funcDuration = performance.now() - funcStart;
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3445',message:'searchSystemFolders 错误',data:{funcDuration,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
       console.error("Failed to search system folders:", error);
       setSystemFolders([]);
     }
@@ -3901,49 +3824,23 @@ export function LauncherWindow() {
   };
 
   const searchFileHistory = async (searchQuery: string) => {
-    // #region agent log
-    const funcStart = performance.now();
-    fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3692',message:'searchFileHistory 开始',data:{searchQuery},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-    // #endregion
-    
     try {
       // Don't search if query is empty
       if (!searchQuery || searchQuery.trim() === "") {
         setFilteredFiles([]);
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3695',message:'searchFileHistory 完成（空查询）',data:{funcDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-        // #endregion
         return;
       }
 
       // 如果缓存未加载，先加载所有文件历史
       if (!allFileHistoryCacheLoadedRef.current || allFileHistoryCacheRef.current.length === 0) {
         try {
-          // #region agent log
-          const loadStart = performance.now();
-          fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3702',message:'searchFileHistory 从后端加载开始',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-          // #endregion
           const allFileHistory = await tauriApi.getAllFileHistory();
-          // #region agent log
-          const loadDuration = performance.now() - loadStart;
-          fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3704',message:'searchFileHistory 从后端加载完成',data:{loadDuration,fileHistoryCount:allFileHistory.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-          // #endregion
           allFileHistoryCacheRef.current = allFileHistory;
           allFileHistoryCacheLoadedRef.current = true;
         } catch (error) {
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3778',message:'searchFileHistory 从后端加载失败，回退到后端搜索',data:{error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-          // #endregion
           console.error("Failed to load file history for search:", error);
           // 如果加载失败，回退到后端搜索
-          const backendSearchStart = performance.now();
           const results = await tauriApi.searchFileHistory(searchQuery);
-          const backendSearchDuration = performance.now() - backendSearchStart;
-          // #region agent log
-          const funcDuration = performance.now() - funcStart;
-          fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3710',message:'searchFileHistory 完成（后端搜索）',data:{funcDuration,backendSearchDuration,resultsCount:results.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-          // #endregion
           if (query.trim() === searchQuery.trim()) {
             setFilteredFiles(results);
           } else {
@@ -3954,15 +3851,9 @@ export function LauncherWindow() {
       }
 
       // 使用前端搜索
-      const frontendSearchStart = performance.now();
       const results = searchFileHistoryFrontend(searchQuery, allFileHistoryCacheRef.current);
-      const frontendSearchDuration = performance.now() - frontendSearchStart;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3720',message:'searchFileHistory 前端搜索完成',data:{frontendSearchDuration,resultsCount:results.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
 
       // Only update if query hasn't changed
-      const updateStart = performance.now();
       const currentQueryTrimmed = query.trim();
       const searchQueryTrimmed = searchQuery.trim();
       if (currentQueryTrimmed === searchQueryTrimmed) {
@@ -4009,16 +3900,7 @@ export function LauncherWindow() {
       } else {
         setFilteredFiles([]);
       }
-      const updateDuration = performance.now() - updateStart;
-      // #region agent log
-      const funcDuration = performance.now() - funcStart;
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3726',message:'searchFileHistory 完成',data:{funcDuration,updateDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
     } catch (error) {
-      // #region agent log
-      const funcDuration = performance.now() - funcStart;
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3730',message:'searchFileHistory 错误',data:{funcDuration,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
       console.error("Failed to search file history:", error);
       if (!searchQuery || searchQuery.trim() === "") {
         setFilteredFiles([]);
@@ -4052,16 +3934,7 @@ export function LauncherWindow() {
   // 启动 Everything 搜索会话（完全复刻 EverythingSearchWindow 的模式）
   const startSearchSession = useCallback(
     async (searchQuery: string) => {
-      // #region agent log
-      const funcStart = performance.now();
-      fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3860',message:'startSearchSession 开始',data:{searchQuery},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-      // #endregion
-      
       if (!searchQuery || searchQuery.trim() === "") {
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3863',message:'startSearchSession 完成（空查询）',data:{funcDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
         const oldSessionId = pendingSessionIdRef.current;
         if (oldSessionId) {
           await closeSessionSafe(oldSessionId);
@@ -4088,10 +3961,6 @@ export function LauncherWindow() {
         setEverythingTotalCount(null);
         setEverythingCurrentCount(0);
         setIsSearchingEverything(false);
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3878',message:'startSearchSession 完成（Everything不可用）',data:{funcDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
         return;
       }
 
@@ -4120,10 +3989,6 @@ export function LauncherWindow() {
 
       // 如果相同查询的会话正在创建中，直接返回
       if (creatingSessionQueryRef.current === trimmed) {
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3903',message:'startSearchSession 完成（会话创建中）',data:{funcDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
         return;
       }
 
@@ -4132,10 +3997,6 @@ export function LauncherWindow() {
         pendingSessionIdRef.current &&
         currentSearchQueryRef.current === trimmed
       ) {
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3910',message:'startSearchSession 完成（已有活跃会话）',data:{funcDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
         return;
       }
 
@@ -4160,11 +4021,6 @@ export function LauncherWindow() {
       setIsSearchingEverything(true);
 
       try {
-        // #region agent log
-        const createSessionStart = performance.now();
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3937',message:'开始创建 Everything 会话',data:{query:trimmed,timeSinceFuncStart:createSessionStart-funcStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
-        
         const sessionTimeoutMs = 60000; // 60秒超时
         const sessionTimeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => {
@@ -4172,10 +4028,6 @@ export function LauncherWindow() {
           }, sessionTimeoutMs);
         });
 
-        // #region agent log - 记录调用后端前的精确时间
-        const beforeInvoke = performance.now();
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4018',message:'准备调用后端 start_everything_search_session',data:{query:trimmed,maxResults:maxResultsToUse,timeSinceFuncStart:beforeInvoke-funcStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
         const session = await Promise.race([
           tauriApi.startEverythingSearchSession(trimmed, {
             maxResults: maxResultsToUse,
@@ -4183,15 +4035,6 @@ export function LauncherWindow() {
           }),
           sessionTimeoutPromise,
         ]);
-        // #region agent log - 记录调用后端后的精确时间
-        const afterInvoke = performance.now();
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4025',message:'后端 start_everything_search_session 返回',data:{query:trimmed,invokeDuration:afterInvoke-beforeInvoke,timeSinceFuncStart:afterInvoke-funcStart},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
-
-        // #region agent log
-        const createSessionDuration = performance.now() - createSessionStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:3954',message:'Everything 会话创建成功',data:{createSessionDuration,sessionId:session.sessionId,totalCount:session.totalCount},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
 
         // 检查查询是否仍然有效
         if (currentSearchQueryRef.current !== trimmed) {
@@ -4212,11 +4055,6 @@ export function LauncherWindow() {
         const currentSessionId = session.sessionId;
         const currentQueryForPage = trimmed;
 
-        // #region agent log
-        const fetchFirstPageStart = performance.now();
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4025',message:'开始获取 Everything 首屏页',data:{query:trimmed,sessionId:currentSessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
-
         const timeoutMs = 30000; // 30秒超时
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => {
@@ -4229,11 +4067,6 @@ export function LauncherWindow() {
           timeoutPromise,
         ])
           .then((res) => {
-            // #region agent log
-            const fetchFirstPageDuration = performance.now() - fetchFirstPageStart;
-            fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4038',message:'Everything 首屏页获取成功',data:{fetchFirstPageDuration,itemsCount:res.items.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-            // #endregion
-
             // 检查会话和查询是否仍然有效
             const currentPendingSessionId = pendingSessionIdRef.current;
             const isSessionStillValid = currentPendingSessionId === currentSessionId;
@@ -4251,18 +4084,8 @@ export function LauncherWindow() {
             setEverythingCurrentCount(res.items.length);
             displayedSearchQueryRef.current = trimmed;
             setIsSearchingEverything(false);
-            
-            // #region agent log
-            const funcDuration = performance.now() - funcStart;
-            fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4075',message:'startSearchSession 完成（成功）',data:{funcDuration,createSessionDuration,fetchFirstPageDuration},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-            // #endregion
           })
           .catch((error) => {
-            // #region agent log
-            const fetchFirstPageDuration = performance.now() - fetchFirstPageStart;
-            const funcDuration = performance.now() - funcStart;
-            fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4080',message:'Everything 首屏页获取失败',data:{fetchFirstPageDuration,funcDuration,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-            // #endregion
             const currentPendingSessionId = pendingSessionIdRef.current;
             const isSessionStillValid = currentPendingSessionId === currentSessionId;
             const isQueryStillValid = currentSearchQueryRef.current === currentQueryForPage;
@@ -4298,10 +4121,6 @@ export function LauncherWindow() {
           });
       } catch (error) {
         creatingSessionQueryRef.current = null;
-        // #region agent log
-        const funcDuration = performance.now() - funcStart;
-        fetch('http://127.0.0.1:7242/ingest/7b6f7af1-8135-4973-8f41-60f30b037947',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'LauncherWindow.tsx:4134',message:'startSearchSession 错误（创建会话失败）',data:{funcDuration,error:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'H'})}).catch(()=>{});
-        // #endregion
         const errorStr = typeof error === "string" ? error : String(error);
         if (
           errorStr.includes('NOT_INSTALLED') ||
