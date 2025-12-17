@@ -470,34 +470,51 @@ export function FileHistoryPanel({ indexStatus, skeuoSurface = "bg-white rounded
           <div>更新时间：{formatTimestamp(indexStatus?.file_history?.mtime)}</div>
         </div>
         {!isLoadingHistory && fileHistoryItems.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2.5">
             <button
               onClick={() => handleClickSummaryPeriod('5days')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 hover:border-blue-300 transition cursor-pointer"
+              className="group relative inline-flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg bg-gradient-to-br from-blue-50 to-blue-100/80 text-blue-700 border border-blue-200/70 hover:border-blue-300 hover:from-blue-100 hover:to-blue-200/80 hover:shadow-md hover:shadow-blue-200/40 active:scale-[0.98] transition-all duration-200 cursor-pointer"
             >
-              <span>近5天</span>
-              <span className="font-semibold">{historySummary.fiveDaysAgo}</span>
+              <span className="font-medium">近5天</span>
+              <span className="inline-flex items-center justify-center min-w-[28px] h-6 px-2 rounded-full bg-blue-500 text-white text-xs font-bold shadow-sm group-hover:bg-blue-600 transition-colors">
+                {historySummary.fiveDaysAgo}
+              </span>
             </button>
             <button
               onClick={() => handleClickSummaryPeriod('5-10days')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 hover:border-green-300 transition cursor-pointer"
+              className="group relative inline-flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg bg-gradient-to-br from-emerald-50 to-emerald-100/80 text-emerald-700 border border-emerald-200/70 hover:border-emerald-300 hover:from-emerald-100 hover:to-emerald-200/80 hover:shadow-md hover:shadow-emerald-200/40 active:scale-[0.98] transition-all duration-200 cursor-pointer"
             >
-              <span>5-10天</span>
-              <span className="font-semibold">{historySummary.tenDaysAgo}</span>
+              <span className="font-medium">5-10天</span>
+              <span className="inline-flex items-center justify-center min-w-[28px] h-6 px-2 rounded-full bg-emerald-500 text-white text-xs font-bold shadow-sm group-hover:bg-emerald-600 transition-colors">
+                {historySummary.tenDaysAgo}
+              </span>
             </button>
             <button
               onClick={() => handleClickSummaryPeriod('10-30days')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full bg-yellow-50 text-yellow-700 border border-yellow-200 hover:bg-yellow-100 hover:border-yellow-300 transition cursor-pointer"
+              className="group relative inline-flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg bg-gradient-to-br from-amber-50 to-amber-100/80 text-amber-700 border border-amber-200/70 hover:border-amber-300 hover:from-amber-100 hover:to-amber-200/80 hover:shadow-md hover:shadow-amber-200/40 active:scale-[0.98] transition-all duration-200 cursor-pointer"
             >
-              <span>10-30天</span>
-              <span className="font-semibold">{historySummary.thirtyDaysAgo}</span>
+              <span className="font-medium">10-30天</span>
+              <span className="inline-flex items-center justify-center min-w-[28px] h-6 px-2 rounded-full bg-amber-500 text-white text-xs font-bold shadow-sm group-hover:bg-amber-600 transition-colors">
+                {historySummary.thirtyDaysAgo}
+              </span>
             </button>
             <button
               onClick={() => handleClickSummaryPeriod('30days')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 hover:border-gray-300 transition cursor-pointer"
+              className={`group relative inline-flex items-center gap-2 px-4 py-2.5 text-sm rounded-lg border transition-all duration-200 ${
+                historySummary.older > 0
+                  ? 'bg-gradient-to-br from-slate-50 to-slate-100/80 text-slate-700 border-slate-200/70 hover:border-slate-300 hover:from-slate-100 hover:to-slate-200/80 hover:shadow-md hover:shadow-slate-200/40 active:scale-[0.98] cursor-pointer'
+                  : 'bg-gray-50/50 text-gray-400 border-gray-200/40 cursor-not-allowed opacity-60'
+              }`}
+              disabled={historySummary.older === 0}
             >
-              <span>30天前</span>
-              <span className="font-semibold">{historySummary.older}</span>
+              <span className="font-medium">30天前</span>
+              <span className={`inline-flex items-center justify-center min-w-[28px] h-6 px-2 rounded-full text-xs font-bold shadow-sm transition-colors ${
+                historySummary.older > 0
+                  ? 'bg-slate-500 text-white group-hover:bg-slate-600'
+                  : 'bg-gray-300 text-gray-500'
+              }`}>
+                {historySummary.older}
+              </span>
             </button>
           </div>
         )}
