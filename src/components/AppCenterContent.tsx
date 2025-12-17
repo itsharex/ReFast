@@ -376,25 +376,21 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
         "加载文件历史超时，数据量可能较大，请稍后重试"
       );
       // 后端已按时间排序，但这里再保险按 last_used 降序
-      // 使用 requestIdleCallback 优化大数组排序，避免阻塞 UI
-      if (list.length > 10000) {
-        // 数据量大时，分批处理排序
-        const sorted = await new Promise<FileHistoryItem[]>((resolve) => {
-          const worker = () => {
-            const sorted = [...list].sort((a, b) => b.last_used - a.last_used);
-            resolve(sorted);
-          };
-          if (window.requestIdleCallback) {
-            window.requestIdleCallback(worker, { timeout: 1000 });
-          } else {
-            setTimeout(worker, 0);
-          }
-        });
-        setFileHistoryItems(sorted);
-      } else {
-        const sorted = [...list].sort((a, b) => b.last_used - a.last_used);
-        setFileHistoryItems(sorted);
-      }
+      // 使用 requestIdleCallback 优化数组排序，避免阻塞 UI（无论数据量大小）
+      const sorted = await new Promise<FileHistoryItem[]>((resolve) => {
+        const worker = () => {
+          const sorted = [...list].sort((a, b) => b.last_used - a.last_used);
+          resolve(sorted);
+        };
+        if (window.requestIdleCallback) {
+          // 使用 requestIdleCallback 在浏览器空闲时执行排序，避免阻塞 UI
+          window.requestIdleCallback(worker, { timeout: 1000 });
+        } else {
+          // 降级方案：使用 setTimeout 让出主线程
+          setTimeout(worker, 0);
+        }
+      });
+      setFileHistoryItems(sorted);
     } catch (error: any) {
       console.error("加载文件历史失败:", error);
       setIndexError(error?.message || "加载文件历史失败");
@@ -428,7 +424,14 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   };
 
   const handleRefreshIndex = async () => {
-    await Promise.all([fetchIndexStatus(), loadFileHistoryList()]);
+    // 优化：先加载轻量数据，再延迟加载重量数据，避免阻塞 UI
+    // 1. 立即加载索引状态（轻量数据）
+    void fetchIndexStatus();
+    
+    // 2. 延迟加载文件历史（重量数据），让 UI 先渲染
+    setTimeout(() => {
+      void loadFileHistoryList();
+    }, 100);
   };
 
   const handleRescanApplications = async () => {
