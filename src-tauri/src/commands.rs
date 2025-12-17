@@ -3890,13 +3890,40 @@ pub fn reveal_in_folder(path: String) -> Result<(), String> {
         let mut file_path_str = trimmed.to_string();
         file_path_str = file_path_str.replace("/", "\\");
         
+        // Check if the path is a directory
+        let is_directory = absolute_path.exists() && absolute_path.is_dir();
+        
         // Check if the path looks like a file (has an extension or is not a directory)
         let is_likely_file = absolute_path.extension().is_some() 
             || (!absolute_path.exists() && !trimmed.ends_with("\\") && !trimmed.ends_with("/"));
 
+        // If it's a directory, open it directly
+        if is_directory {
+            // Get the canonicalized directory path
+            let dir_path = absolute_path
+                .canonicalize()
+                .map_err(|e| format!("Failed to canonicalize directory path: {}", e))?
+                .to_string_lossy()
+                .replace("/", "\\");
+            
+            // Remove \\?\ prefix if present
+            let mut normalized_dir = dir_path;
+            if normalized_dir.starts_with("\\\\?\\") {
+                normalized_dir = normalized_dir[4..].to_string();
+            }
+            
+            // Remove trailing backslash if present
+            normalized_dir = normalized_dir.trim_end_matches('\\').to_string();
+            
+            // Open the directory directly
+            Command::new("explorer")
+                .arg(&normalized_dir)
+                .spawn()
+                .map_err(|e| format!("Failed to open directory: {}", e))?;
+        }
         // If it's a file (exists and is file) or looks like a file path, use /select
         // This ensures we open the correct folder even if the file doesn't exist
-        if (absolute_path.exists() && absolute_path.is_file()) || is_likely_file {
+        else if (absolute_path.exists() && absolute_path.is_file()) || is_likely_file {
             // Get the absolute path for the file to select
             let path_to_select = if absolute_path.exists() {
                 // If path exists, use canonicalized path
@@ -3958,7 +3985,7 @@ pub fn reveal_in_folder(path: String) -> Result<(), String> {
                 .spawn()
                 .map_err(|e| format!("Failed to execute explorer command: {}", e))?;
         } else {
-            // It's a directory or we can't determine, just open the parent folder
+            // It's neither a directory nor a file (can't determine), just open the parent folder
             Command::new("explorer")
                 .arg(&parent_str)
                 .spawn()

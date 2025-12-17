@@ -1676,7 +1676,9 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                     <div className="flex items-center justify-between mb-3">
                       <div className="font-semibold text-gray-900">文件历史</div>
                       <span className="text-xs px-2 py-1 rounded-full bg-gray-50 text-gray-700 border border-gray-200">
-                        {indexStatus?.file_history?.total ?? 0} 条
+                        {(historyStartDate || historyEndDate) 
+                          ? `${filteredHistoryItems.length} / ${indexStatus?.file_history?.total ?? 0} 条`
+                          : `${indexStatus?.file_history?.total ?? 0} 条`}
                       </span>
                     </div>
                     <div className="space-y-1 text-sm text-gray-700">
