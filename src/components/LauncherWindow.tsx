@@ -5153,6 +5153,27 @@ export function LauncherWindow() {
       return;
     }
 
+    // 处理退格键删除粘贴的图片
+    if (e.key === "Backspace") {
+      // 如果输入框为空且有粘贴的图片，则删除图片预览
+      if (query === "" && pastedImageDataUrl) {
+        e.preventDefault();
+        setPastedImageDataUrl(null);
+        setPastedImagePath(null);
+        // 清除搜索结果
+        clearAllResults({
+          setResults,
+          setHorizontalResults,
+          setVerticalResults,
+          setSelectedHorizontalIndex,
+          setSelectedVerticalIndex,
+          horizontalResultsRef,
+          currentLoadResultsRef
+        });
+        return;
+      }
+    }
+
     if (e.key === "ArrowDown") {
       e.preventDefault();
       
