@@ -578,11 +578,10 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
     return () => window.removeEventListener("keydown", handleEscape, true);
   }, [recordingAppPath, isOpen]);
 
-  // 筛选应用列表（包含搜索和图标筛选）
-  const filteredAppIndexList = useMemo(() => {
+  // 先应用搜索筛选（用于统计）
+  const searchFilteredList = useMemo(() => {
     let filtered = appIndexList;
     
-    // 先应用搜索筛选
     if (appIndexSearch.trim()) {
       const query = appIndexSearch.toLowerCase();
       filtered = filtered.filter(
@@ -592,7 +591,21 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
       );
     }
     
-    // 再应用图标筛选
+    return filtered;
+  }, [appIndexList, appIndexSearch]);
+
+  // 计算图标统计信息（基于搜索结果，不受 tab 筛选影响）
+  const iconStats = useMemo(() => {
+    const withIcon = searchFilteredList.filter(item => isValidIcon(item.icon)).length;
+    const withoutIcon = searchFilteredList.length - withIcon;
+    return { withIcon, withoutIcon };
+  }, [searchFilteredList]);
+
+  // 再应用图标筛选（用于显示）
+  const filteredAppIndexList = useMemo(() => {
+    let filtered = searchFilteredList;
+    
+    // 应用图标筛选
     if (iconFilter === 'withIcon') {
       filtered = filtered.filter(item => isValidIcon(item.icon));
     } else if (iconFilter === 'withoutIcon') {
@@ -602,14 +615,7 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
     
     console.log("[应用结果列表] 筛选结果 - 搜索词:", appIndexSearch, "图标筛选:", iconFilter, "原始数量:", appIndexList.length, "筛选后数量:", filtered.length);
     return filtered;
-  }, [appIndexList, appIndexSearch, iconFilter]);
-
-  // 计算图标统计信息
-  const iconStats = useMemo(() => {
-    const withIcon = filteredAppIndexList.filter(item => isValidIcon(item.icon)).length;
-    const withoutIcon = filteredAppIndexList.length - withIcon;
-    return { withIcon, withoutIcon };
-  }, [filteredAppIndexList]);
+  }, [searchFilteredList, iconFilter, appIndexSearch, appIndexList.length]);
 
   // 渲染应用图标，加载失败时显示占位图标
   const renderAppIcon = (app: AppInfo) => {
