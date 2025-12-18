@@ -319,10 +319,10 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     try {
       setIsLoadingIndex(true);
       setIndexError(null);
-      // 添加超时保护：8秒超时
+      // 添加超时保护：10秒超时（给数据库查询足够的时间）
       const data = await withTimeout(
         tauriApi.getIndexStatus(),
-        8000,
+        10000,
         "获取索引状态超时，请重试"
       );
       setIndexStatus(data);

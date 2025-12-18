@@ -627,6 +627,7 @@ fn main() {
             restore_backup,
             list_backups,
             get_index_status,
+            check_database_health,
             start_everything,
             open_everything_download,
             download_everything,

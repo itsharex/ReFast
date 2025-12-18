@@ -202,3 +202,13 @@ export interface UpdateCheckResult {
   published_at: string;
 }
 
+export interface DatabaseHealthStatus {
+  accessible: boolean;
+  error_message?: string | null;
+  db_path?: string | null;
+  db_size_bytes?: number | null;
+  file_history_count?: number | null;
+  shortcuts_count?: number | null;
+  memos_count?: number | null;
+}
+

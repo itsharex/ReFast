@@ -52,6 +52,7 @@ pub fn get_connection(app_data_dir: &Path) -> Result<Connection, String> {
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA foreign_keys = ON;
+        PRAGMA busy_timeout = 5000;
     "#,
     )
     .map_err(|e| format!("Failed to set SQLite pragmas: {}", e))?;
@@ -76,6 +77,7 @@ pub fn get_readonly_connection(app_data_dir: &Path) -> Result<Connection, String
         r#"
         PRAGMA synchronous = NORMAL;
         PRAGMA foreign_keys = ON;
+        PRAGMA busy_timeout = 5000;
     "#,
     )
     .map_err(|e| format!("Failed to set SQLite pragmas: {}", e))?;

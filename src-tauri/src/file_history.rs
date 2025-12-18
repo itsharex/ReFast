@@ -150,12 +150,52 @@ pub fn save_history(app_data_dir: &Path) -> Result<(), String> {
 }
 
 /// 获取历史记录条数（必要时从磁盘加载一次）
+/// 添加超时保护，避免因数据库锁定而永久阻塞
 pub fn get_history_count(app_data_dir: &Path) -> Result<usize, String> {
-    let conn = db::get_connection(app_data_dir)?;
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM file_history", [], |row| row.get(0))
-        .map_err(|e| format!("Failed to count file history: {}", e))?;
-    Ok(count as usize)
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+    
+    // 创建通道用于线程通信
+    let (tx, rx) = mpsc::channel();
+    let app_data_dir_owned = app_data_dir.to_path_buf();
+    
+    // 在独立线程中执行数据库操作
+    thread::spawn(move || {
+        let result = (|| -> Result<usize, String> {
+            // 使用只读连接，减少锁竞争
+            let db_path = db::get_db_path(&app_data_dir_owned);
+            let conn = if db_path.exists() {
+                // 优先使用只读连接，避免锁竞争
+                db::get_readonly_connection(&app_data_dir_owned).or_else(|_| {
+                    // 如果只读连接失败，回退到读写连接
+                    db::get_connection(&app_data_dir_owned)
+                })?
+            } else {
+                // 数据库不存在，使用读写连接（需要创建）
+                db::get_connection(&app_data_dir_owned)?
+            };
+            
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM file_history", [], |row| row.get(0))
+                .map_err(|e| format!("Failed to count file history: {}", e))?;
+            Ok(count as usize)
+        })();
+        let _ = tx.send(result);
+    });
+    
+    // 等待结果，最多 5 秒超时（增加超时时间，给数据库更多时间响应）
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("[file_history] get_history_count: 数据库查询超时（5秒），可能被锁定或查询过慢");
+            Err("Database query timeout (possible lock or slow query)".to_string())
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            eprintln!("[file_history] get_history_count: 查询线程异常终止");
+            Err("Database query thread disconnected".to_string())
+        }
+    }
 }
 
 pub fn add_file_path(path: String, app_data_dir: &Path) -> Result<(), String> {

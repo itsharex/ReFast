@@ -13,6 +13,7 @@ import type {
   DatabaseBackupList,
   PluginUsage,
   UpdateCheckResult,
+  DatabaseHealthStatus,
 } from "../types";
 
 export const tauriApi = {
@@ -244,6 +245,10 @@ export const tauriApi = {
 
   async getIndexStatus(): Promise<IndexStatus> {
     return invoke("get_index_status");
+  },
+
+  async checkDatabaseHealth(): Promise<DatabaseHealthStatus> {
+    return invoke("check_database_health");
   },
 
   async getEverythingPath(): Promise<string | null> {

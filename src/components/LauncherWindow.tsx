@@ -117,7 +117,6 @@ export function LauncherWindow() {
   const [selectedHorizontalIndex, setSelectedHorizontalIndex] = useState<number | null>(null);
   const [selectedVerticalIndex, setSelectedVerticalIndex] = useState<number | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0); // Keep for now, will be computed from selectedHorizontalIndex/selectedVerticalIndex
-  const [isLoading, setIsLoading] = useState(false);
   const [isHoveringAiIcon, setIsHoveringAiIcon] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiAnswer, setAiAnswer] = useState<string | null>(null);
@@ -1705,7 +1704,7 @@ export function LauncherWindow() {
 
       systemFolders.forEach((folder) => {
         const normalizedPath = folder.path.toLowerCase().replace(/\\/g, "/");
-        const fileHistory = fileHistoryMap.get(normalizedPath);
+        fileHistoryMap.get(normalizedPath);
 
       });
     }
@@ -3438,91 +3437,6 @@ export function LauncherWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHorizontalIndex]); // 只依赖 selectedHorizontalIndex
 
-  const loadApplications = async (forceRescan: boolean = false) => {
-    try {
-      setIsLoading(true);
-      
-      if (forceRescan) {
-        // 重新扫描：通过事件监听获取结果
-        await new Promise<void>((resolve, reject) => {
-          let unlistenComplete: (() => void) | null = null;
-          let unlistenError: (() => void) | null = null;
-          
-          const setupListeners = async () => {
-            // 监听扫描完成事件
-            unlistenComplete = await listen<{ apps: AppInfo[] }>("app-rescan-complete", (event) => {
-              const { apps } = event.payload;
-              const filteredApps = filterWindowsApps(apps);
-              setApps(filteredApps);
-              setFilteredApps(filteredApps.slice(0, 10));
-              setIsLoading(false);
-              
-              // 清理监听器
-              if (unlistenComplete) unlistenComplete();
-              if (unlistenError) unlistenError();
-              
-              resolve();
-            });
-
-            // 监听扫描错误事件
-            unlistenError = await listen<{ error: string }>("app-rescan-error", (event) => {
-              const { error } = event.payload;
-              console.error("应用重新扫描失败:", error);
-              setApps([]);
-              setFilteredApps([]);
-              setIsLoading(false);
-              
-              // 清理监听器
-              if (unlistenComplete) unlistenComplete();
-              if (unlistenError) unlistenError();
-              
-              reject(new Error(error));
-            });
-          };
-
-          setupListeners().then(() => {
-            // 启动重新扫描
-            tauriApi.rescanApplications().catch((error) => {
-              console.error("Failed to start rescan:", error);
-              setApps([]);
-              setFilteredApps([]);
-              setIsLoading(false);
-              
-              // 清理监听器
-              if (unlistenComplete) unlistenComplete();
-              if (unlistenError) unlistenError();
-              
-              reject(error);
-            });
-          }).catch((error) => {
-            setIsLoading(false);
-            reject(error);
-          });
-        });
-      } else {
-        // 正常扫描：直接返回结果（移除不必要的延迟包装）
-        try {
-          const allApps = await tauriApi.scanApplications();
-          const filteredApps = filterWindowsApps(allApps);
-          setApps(filteredApps);
-          setFilteredApps(filteredApps.slice(0, 10));
-        } catch (error) {
-          console.error("Failed to load applications:", error);
-          setApps([]);
-          setFilteredApps([]);
-        } finally {
-          setIsLoading(false);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to load applications:", error);
-      setApps([]);
-      setFilteredApps([]);
-      setIsLoading(false);
-    }
-  };
-
-
   // 过滤掉 WindowsApps 路径的应用（前端双重保险）
   const filterWindowsApps = useCallback((apps: AppInfo[]): AppInfo[] => {
     return apps.filter((app) => {
@@ -4279,8 +4193,6 @@ export function LauncherWindow() {
             
             if (existingItem) {
               // 更新现有项
-              const oldUseCount = existingItem.use_count;
-              const oldLastUsed = existingItem.last_used;
               existingItem.last_used = timestampToUpdate;
               existingItem.use_count += 1;
               
@@ -4629,8 +4541,6 @@ export function LauncherWindow() {
           
           if (existingItem) {
             // 更新现有项
-            const oldUseCount = existingItem.use_count;
-            const oldLastUsed = existingItem.last_used;
             existingItem.last_used = timestampToUpdate;
             existingItem.use_count += 1;
             
@@ -6123,14 +6033,7 @@ export function LauncherWindow() {
           ) : null}
 
           {/* Loading or Empty State */}
-          {!showAiAnswer && isLoading && (
-            <div className="px-6 py-8 text-center text-gray-500 flex-1 flex flex-col items-center justify-center">
-              <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-gray-400 mb-2"></div>
-              <div>正在扫描应用...</div>
-            </div>
-          )}
-
-          {!showAiAnswer && !isLoading && results.length === 0 && query && (
+          {!showAiAnswer && results.length === 0 && query && (
             <div className="px-6 py-8 text-center text-gray-500 flex-1 flex items-center justify-center">
               未找到匹配的应用或文件
             </div>
@@ -6194,7 +6097,7 @@ export function LauncherWindow() {
             </div>
           )}
 
-          {!showAiAnswer && !isLoading && results.length === 0 && !query && (
+          {!showAiAnswer && results.length === 0 && !query && (
             <div className="px-6 py-8 text-center text-gray-400 text-sm flex-1 flex items-center justify-center">
               输入关键词搜索应用，或粘贴文件路径
             </div>
@@ -6253,14 +6156,14 @@ export function LauncherWindow() {
                     {(!everythingError || !everythingError.startsWith("SERVICE_NOT_RUNNING")) && (
                       <button
                         ref={downloadButtonRef}
-                        onPointerDown={(e) => {}}
+                        onPointerDown={() => {}}
                         onClick={(e) => {
 
                           if (!isDownloadingEverything) {
 
                             e.preventDefault();
                             e.stopPropagation();
-                            handleDownloadEverything().catch((error) => {
+                            handleDownloadEverything().catch(() => {
 
                             });
                           } else {

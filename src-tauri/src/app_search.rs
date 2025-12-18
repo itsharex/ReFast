@@ -127,6 +127,9 @@ pub mod windows {
 
     // Windows-specific implementation
     pub fn scan_start_menu(tx: Option<std::sync::mpsc::Sender<(u8, String)>>) -> Result<Vec<AppInfo>, String> {
+        let scan_start_time = std::time::Instant::now();
+        crate::log!("AppScan", "===== 开始扫描应用 =====");
+        
         let mut apps = Vec::new();
 
         // Common start menu paths - scan user, local user, and system start menus
@@ -153,14 +156,26 @@ pub mod windows {
                 .map(|p| PathBuf::from(p).join("Desktop")),
         ];
 
+        // 记录扫描路径
+        let start_menu_paths_str: Vec<String> = start_menu_paths.iter().flatten().map(|p| p.to_string_lossy().to_string()).collect();
+        let desktop_paths_str: Vec<String> = desktop_paths.iter().flatten().map(|p| p.to_string_lossy().to_string()).collect();
+        crate::log!("AppScan", "扫描路径准备完成");
+        crate::log!("AppScan", "  开始菜单路径: {:?}", start_menu_paths_str);
+        crate::log!("AppScan", "  桌面路径: {:?}", desktop_paths_str);
+
         if let Some(ref tx) = tx {
             let _ = tx.send((5, "开始扫描应用...".to_string()));
         }
 
         // Scan start menu paths
+        let start_menu_scan_start = std::time::Instant::now();
         let start_menu_count = start_menu_paths.len();
         for (idx, start_menu_path) in start_menu_paths.into_iter().flatten().enumerate() {
             if start_menu_path.exists() {
+                let path_scan_start = std::time::Instant::now();
+                let path_str = start_menu_path.to_string_lossy().to_string();
+                let apps_before = apps.len();
+                
                 if let Some(ref tx) = tx {
                     let path_name = start_menu_path.file_name()
                         .and_then(|n| n.to_str())
@@ -168,43 +183,64 @@ pub mod windows {
                         .to_string();
                     let _ = tx.send((10 + (idx as u8 * 15), format!("正在扫描: {}", path_name)));
                 }
+                
                 // Start scanning from depth 0, limit to 3 levels for better coverage
-                if let Err(_e) = scan_directory(&start_menu_path, &mut apps, 0) {
-                    // Continue on error
+                if let Err(e) = scan_directory(&start_menu_path, &mut apps, 0) {
+                    crate::log!("AppScan", "开始菜单扫描出错: {} - {}", path_str, e);
+                } else {
+                    let apps_found = apps.len() - apps_before;
+                    let duration_ms = path_scan_start.elapsed().as_millis();
+                    crate::log!("AppScan", "开始菜单扫描完成: {} - 找到 {} 个应用 (耗时 {}ms)", path_str, apps_found, duration_ms);
                 }
             }
         }
+        let start_menu_duration = start_menu_scan_start.elapsed();
+        crate::log!("AppScan", "所有开始菜单扫描完成 - 共找到 {} 个应用 (总耗时 {}ms)", apps.len(), start_menu_duration.as_millis());
 
         // Scan desktop paths (only scan depth 0 for desktop, no recursion)
+        let desktop_scan_start = std::time::Instant::now();
         if let Some(ref tx) = tx {
             let _ = tx.send((60, "正在扫描桌面...".to_string()));
         }
+        let apps_before_desktop = apps.len();
         for desktop_path in desktop_paths.into_iter().flatten() {
             if desktop_path.exists() {
-                if let Err(_e) = scan_directory(&desktop_path, &mut apps, 0) {
-                    // Continue on error
+                if let Err(e) = scan_directory(&desktop_path, &mut apps, 0) {
+                    crate::log!("AppScan", "桌面扫描出错: {} - {}", desktop_path.to_string_lossy(), e);
                 }
             }
         }
+        let desktop_apps_found = apps.len() - apps_before_desktop;
+        let desktop_duration = desktop_scan_start.elapsed();
+        crate::log!("AppScan", "桌面扫描完成 - 找到 {} 个应用 (耗时 {}ms)", desktop_apps_found, desktop_duration.as_millis());
 
         // Scan Microsoft Store / UWP apps via shell:AppsFolder enumeration
+        let uwp_scan_start = std::time::Instant::now();
         if let Some(ref tx) = tx {
             let _ = tx.send((70, "正在扫描 Microsoft Store 应用...".to_string()));
         }
-        eprintln!("[scan_start_menu] Starting UWP apps scan...");
+        crate::log!("AppScan", "开始扫描 UWP/Microsoft Store 应用...");
+        
         match scan_uwp_apps() {
             Ok(mut uwp_apps) => {
-                eprintln!("[scan_start_menu] UWP scan succeeded: found {} apps", uwp_apps.len());
+                let uwp_count = uwp_apps.len();
+                let uwp_duration = uwp_scan_start.elapsed();
+                crate::log!("AppScan", "UWP 应用扫描成功 - 找到 {} 个应用 (耗时 {}ms)", uwp_count, uwp_duration.as_millis());
                 apps.append(&mut uwp_apps);
             }
             Err(e) => {
-                eprintln!("[scan_start_menu] UWP scan failed: {}", e);
+                let uwp_duration = uwp_scan_start.elapsed();
+                crate::log!("AppScan", "UWP 应用扫描失败 - {} (耗时 {}ms)", e, uwp_duration.as_millis());
             }
         }
 
+        let apps_before_dedup = apps.len();
         if let Some(ref tx) = tx {
             let _ = tx.send((80, format!("找到 {} 个应用，正在去重...", apps.len())));
         }
+        crate::log!("AppScan", "开始去重处理 - 原始应用数: {}", apps_before_dedup);
+        
+        let dedup_start = std::time::Instant::now();
 
         // Remove duplicates based on path (more accurate than name)
         // But keep ms-settings: URI as fallback if shell:AppsFolder exists
@@ -464,6 +500,12 @@ pub mod windows {
             eprintln!("[scan_start_menu] Filtered out {} WindowsApps entries", initial_count - filtered_count);
         }
         
+        let apps_after_dedup = apps.len();
+        let dedup_duration = dedup_start.elapsed();
+        let removed_count = apps_before_dedup - apps_after_dedup;
+        crate::log!("AppScan", "去重处理完成 - 去重前: {} 个, 去重后: {} 个, 移除: {} 个 (耗时 {}ms)", 
+            apps_before_dedup, apps_after_dedup, removed_count, dedup_duration.as_millis());
+        
         if let Some(ref tx) = tx {
             let _ = tx.send((95, format!("去重完成，共 {} 个应用", apps.len())));
         }
@@ -472,6 +514,10 @@ pub mod windows {
         if let Some(ref tx) = tx {
             let _ = tx.send((100, "扫描完成".to_string()));
         }
+
+        let total_duration = scan_start_time.elapsed();
+        crate::log!("AppScan", "===== 扫描全部完成 - 最终应用数: {} 个, 总耗时: {}.{}s =====", 
+            apps.len(), total_duration.as_secs(), total_duration.subsec_millis());
 
         Ok(apps)
     }
@@ -516,6 +562,7 @@ pub mod windows {
 
     /// Public function for direct testing of UWP app scanning
     pub fn scan_uwp_apps_direct() -> Result<Vec<AppInfo>, String> {
+        crate::log!("AppScan", "[UWP] 开始 UWP 应用扫描");
         fn decode_oem_bytes(bytes: &[u8]) -> Result<String, String> {
             if bytes.is_empty() {
                 return Ok(String::new());
@@ -677,6 +724,9 @@ pub mod windows {
         );
         // #endregion
 
+        crate::log!("AppScan", "[UWP] 准备执行 PowerShell Get-StartApps 命令");
+        let powershell_start = std::time::Instant::now();
+        
         let output = Command::new("powershell")
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .arg("-NoLogo")
@@ -685,7 +735,17 @@ pub mod windows {
             .arg("-Command")
             .arg(script)
             .output()
-            .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+            .map_err(|e| {
+                crate::log!("AppScan", "[UWP] PowerShell 执行失败: {}", e);
+                format!("Failed to run PowerShell: {}", e)
+            })?;
+        
+        let powershell_duration = powershell_start.elapsed();
+        crate::log!("AppScan", "[UWP] PowerShell 执行完成 (耗时 {}ms, 退出码: {}, stdout: {} bytes, stderr: {} bytes)", 
+            powershell_duration.as_millis(), 
+            output.status.code().unwrap_or(-1),
+            output.stdout.len(),
+            output.stderr.len());
 
         // #region agent log - after spawn
         agent_log(
@@ -713,6 +773,7 @@ pub mod windows {
             );
         }
 
+        crate::log!("AppScan", "[UWP] 开始解析 PowerShell 输出");
         eprintln!("[scan_uwp_apps] PowerShell exit code: {}", output.status.code().unwrap_or(-1));
         eprintln!("[scan_uwp_apps] stderr length: {} bytes, stdout length: {} bytes", 
                   output.stderr.len(), output.stdout.len());
@@ -722,6 +783,7 @@ pub mod windows {
         
         if !output.status.success() {
             // PowerShell 执行失败
+            crate::log!("AppScan", "[UWP] PowerShell 执行失败，退出码: {}", output.status.code().unwrap_or(-1));
             eprintln!("[scan_uwp_apps] ⚠ PowerShell 执行失败！");
             
             // 尝试解码 stderr（可能包含错误信息）
@@ -762,12 +824,16 @@ pub mod windows {
         }
 
         // PowerShell 执行成功，解码 stdout
+        crate::log!("AppScan", "[UWP] 开始解码 PowerShell 输出...");
+        let decode_start = std::time::Instant::now();
         let stdout = stdout_result?;
         let stdout_trimmed = stdout.trim();
+        crate::log!("AppScan", "[UWP] 输出解码完成 (耗时 {}ms, 长度 {} bytes)", decode_start.elapsed().as_millis(), stdout_trimmed.len());
         eprintln!("[scan_uwp_apps] PowerShell stdout length: {} bytes", stdout_trimmed.len());
         
         if stdout_trimmed.is_empty() {
             let stderr_str = String::from_utf8_lossy(&output.stderr);
+            crate::log!("AppScan", "[UWP] PowerShell 返回空输出");
             eprintln!("[scan_uwp_apps] ⚠ PowerShell returned empty stdout");
             eprintln!("[scan_uwp_apps] stderr 预览: {}", stderr_str);
             // #region agent log - empty stdout
@@ -796,6 +862,7 @@ pub mod windows {
         );
         // #endregion
 
+        crate::log!("AppScan", "[UWP] 检测输出模式...");
         // 处理 B64JSON:/B64:/RAW: 前缀；如果没有前缀则保持原样
         let (payload_str, mode) = if stdout_trimmed.starts_with("B64JSON:") {
             (&stdout_trimmed["B64JSON:".len()..], "B64JSON")
@@ -807,6 +874,15 @@ pub mod windows {
             (stdout_trimmed, "UNKNOWN")
         };
 
+        crate::log!("AppScan", "[UWP] 输出模式: {}, payload 长度: {} bytes", mode, payload_str.len());
+        
+        // 如果是 UNKNOWN 模式，输出前 200 个字符以便调试
+        if mode == "UNKNOWN" {
+            let first_200: String = stdout_trimmed.chars().take(200).collect();
+            crate::log!("AppScan", "[UWP] 警告: UNKNOWN 模式，输出前 200 字符: {}", first_200);
+            eprintln!("[scan_uwp_apps] 警告: 未识别的输出模式，前 200 字符: {}", first_200);
+        }
+        
         // #region agent log - stdout mode
         agent_log(
             "H2",
@@ -820,6 +896,8 @@ pub mod windows {
         );
         // #endregion
 
+        crate::log!("AppScan", "[UWP] 开始 Base64 解码...");
+        let base64_start = std::time::Instant::now();
         // 如果是 B64 前缀，则尝试 Base64 解码；否则使用原始字符串
         let decoded_json = if mode == "B64JSON" || mode == "B64" {
             match base64::engine::general_purpose::STANDARD.decode(payload_str) {
@@ -848,17 +926,39 @@ pub mod windows {
         } else {
             payload_str.to_string()
         };
+        
+        crate::log!("AppScan", "[UWP] Base64 解码完成 (耗时 {}ms)", base64_start.elapsed().as_millis());
 
+        crate::log!("AppScan", "[UWP] 开始生成输出预览 (总长度: {} bytes)...", decoded_json.len());
+        let preview_start = std::time::Instant::now();
+        
         // 打印前 500 个字符用于调试
         let preview = if decoded_json.len() > 500 {
             format!("{}...", &decoded_json[..500])
         } else {
             decoded_json.clone()
         };
+        
+        let preview_duration = preview_start.elapsed();
+        crate::log!("AppScan", "[UWP] 输出预览生成完成 (预览长度: {} chars, 耗时 {}ms)", preview.len(), preview_duration.as_millis());
+        
+        // 输出预览可能很慢，添加计时
+        let eprintln_start = std::time::Instant::now();
         eprintln!("[scan_uwp_apps] PowerShell output preview: {}", preview);
+        let eprintln_duration = eprintln_start.elapsed();
+        if eprintln_duration.as_millis() > 10 {
+            crate::log!("AppScan", "[UWP] 警告: eprintln 输出耗时 {}ms", eprintln_duration.as_millis());
+        }
+        
+        crate::log!("AppScan", "[UWP] 检查 Unicode 转义序列...");
+        let unicode_check_start = std::time::Instant::now();
         
         // 检查是否包含 Unicode 转义序列（\uXXXX）
         let unicode_escape_count = preview.matches("\\u").count();
+        
+        let unicode_check_duration = unicode_check_start.elapsed();
+        crate::log!("AppScan", "[UWP] Unicode 检查完成 (找到 {} 个转义序列, 耗时 {}ms)", unicode_escape_count, unicode_check_duration.as_millis());
+        
         if unicode_escape_count > 0 {
             eprintln!("[scan_uwp_apps] 检测到 {} 个 Unicode 转义序列", unicode_escape_count);
             // 提取前几个 Unicode 转义序列
@@ -872,6 +972,9 @@ pub mod windows {
             eprintln!("[scan_uwp_apps] 前几个 Unicode 转义序列: {:?}", found_escapes);
         }
 
+        crate::log!("AppScan", "[UWP] 开始解析 JSON (长度 {} bytes)...", decoded_json.len());
+        let json_parse_start = std::time::Instant::now();
+        
         // Handle both array and single-object JSON outputs
         let entries: Vec<StartAppEntry> = match serde_json::from_str::<Vec<StartAppEntry>>(&decoded_json) {
             Ok(entries) => entries,
@@ -898,6 +1001,8 @@ pub mod windows {
             }
         };
 
+        let json_parse_duration = json_parse_start.elapsed();
+        crate::log!("AppScan", "[UWP] JSON 解析成功，找到 {} 个条目 (耗时 {}ms)", entries.len(), json_parse_duration.as_millis());
         eprintln!("[scan_uwp_apps] Parsed {} entries from JSON", entries.len());
 
         // #region agent log - json parsed
@@ -917,9 +1022,17 @@ pub mod windows {
         );
         // #endregion
 
+        crate::log!("AppScan", "[UWP] 开始处理 {} 个应用条目...", entries.len());
         let mut apps = Vec::with_capacity(entries.len());
         let mut chinese_app_count = 0;
+        let processing_start = std::time::Instant::now();
+        
         for (idx, entry) in entries.iter().enumerate() {
+            // 每处理10个应用记录一次进度
+            if idx > 0 && idx % 10 == 0 {
+                crate::log!("AppScan", "[UWP] 处理进度: {}/{} (已耗时 {}ms)", idx, entries.len(), processing_start.elapsed().as_millis());
+            }
+            
             let name = entry.name.trim();
             let app_id = entry.app_id.trim();
             
@@ -989,11 +1102,20 @@ pub mod windows {
             let path = expand_known_folder_guid(&path);
             
             let name_string = name.to_string();
-            let (name_pinyin, name_pinyin_initials) = if contains_chinese(name) {
-                (
-                    Some(to_pinyin(name).to_lowercase()),
-                    Some(to_pinyin_initials(name).to_lowercase()),
-                )
+            
+            // 优化：复用前面的 has_chinese 判断，避免重复调用 contains_chinese
+            let (name_pinyin, name_pinyin_initials) = if has_chinese {
+                let pinyin_start = std::time::Instant::now();
+                let pinyin = Some(to_pinyin(name).to_lowercase());
+                let pinyin_initials = Some(to_pinyin_initials(name).to_lowercase());
+                let pinyin_duration = pinyin_start.elapsed();
+                
+                // 如果拼音转换超过50ms，记录警告
+                if pinyin_duration.as_millis() > 50 {
+                    crate::log!("AppScan", "[UWP] 警告: 应用 '{}' 的拼音转换耗时 {}ms", name, pinyin_duration.as_millis());
+                }
+                
+                (pinyin, pinyin_initials)
             } else {
                 (None, None)
             };
@@ -1008,6 +1130,10 @@ pub mod windows {
             });
         }
 
+        let processing_duration = processing_start.elapsed();
+        crate::log!("AppScan", "[UWP] 应用条目处理完成 - 创建了 {} 个应用（其中 {} 个中文应用）(耗时 {}ms)", 
+            apps.len(), chinese_app_count, processing_duration.as_millis());
+        crate::log!("AppScan", "[UWP] 成功创建 {} 个应用（其中 {} 个中文名）", apps.len(), chinese_app_count);
         eprintln!("[scan_uwp_apps] Successfully created {} apps ({} with Chinese names)", 
             apps.len(), chinese_app_count);
         

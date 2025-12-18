@@ -53,6 +53,16 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
   const appIsCompletingRef = useRef(false);
   const appFinalKeysRef = useRef<string[] | null>(null);
 
+  // 超时保护辅助函数
+  const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+      ),
+    ]);
+  };
+
   // 加载应用索引列表
   const loadAppIndexList = async (forceRescan = false) => {
     if (appIndexLoading) return;
@@ -67,11 +77,19 @@ export function AppIndexList({ isOpen, onClose, appHotkeys, onHotkeysChange }: A
         // 重新扫描：立即返回，通过事件通知结果，避免阻塞 UI
         // 初始化进度状态
         setAppIndexProgress({ progress: 0, message: "准备开始扫描..." });
-        await tauriApi.rescanApplications();
+        await withTimeout(
+          tauriApi.rescanApplications(),
+          5000,
+          "重新扫描请求超时，但扫描可能在后台继续进行"
+        );
         // 不在这里等待结果，事件监听器会处理
       } else {
-        // 普通扫描：等待结果
-        const data = await tauriApi.scanApplications();
+        // 普通扫描：等待结果，添加 30 秒超时保护
+        const data = await withTimeout(
+          tauriApi.scanApplications(),
+          30000,
+          "加载应用列表超时，请检查系统状态或重试"
+        );
         console.log("[应用结果列表] 加载完成，总数:", data.length);
         console.log("[应用结果列表] 应用数据:", data);
         setAppIndexList(data);

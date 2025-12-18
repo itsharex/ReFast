@@ -517,36 +517,41 @@ pub async fn scan_applications(app: tauri::AppHandle) -> Result<Vec<app_search::
     let app_clone = app.clone();
     async_runtime::spawn_blocking(move || {
         let cache = get_app_cache();
-        let mut cache_guard = lock_app_cache_safe(&cache);
+        
+        // 先检查缓存是否已存在（快速路径）
+        {
+            let cache_guard = lock_app_cache_safe(&cache);
+            if let Some(ref cached_apps) = *cache_guard {
+                // Return cached apps if available (Arc 共享引用，只增加引用计数)
+                let apps_vec: Vec<app_search::AppInfo> = (**cached_apps).clone();
+                return Ok(apps_vec);
+            }
+            // 锁在这里自动释放
+        }
 
-        let apps = if let Some(ref cached_apps) = *cache_guard {
-            // Return cached apps if available (Arc 共享引用，只增加引用计数)
-            cached_apps.clone()
-        } else {
-            // Try to load from disk cache first
-            let app_data_dir = get_app_data_dir(&app_clone)?;
-            let apps_vec = if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
-                if !disk_cache.is_empty() {
-                    disk_cache
-                } else {
-                    // Scan applications (potentially slow) on background thread
-                    app_search::windows::scan_start_menu(None)?
-                }
+        // 缓存不存在，需要扫描或从磁盘加载
+        // ⚠️ 重要：在扫描期间不持有锁，避免阻塞其他操作
+        let app_data_dir = get_app_data_dir(&app_clone)?;
+        let apps_vec = if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
+            if !disk_cache.is_empty() {
+                disk_cache
             } else {
-                // Scan applications (potentially slow) on background thread
+                // Scan applications (potentially slow) - 在没有锁的情况下执行
                 app_search::windows::scan_start_menu(None)?
-            };
-            Arc::new(apps_vec)
+            }
+        } else {
+            // Scan applications (potentially slow) - 在没有锁的情况下执行
+            app_search::windows::scan_start_menu(None)?
         };
 
-        // Update cache with apps including builtin apps (包装为 Arc)
-        *cache_guard = Some(apps.clone());
-        
-        // 为了返回 Vec，需要克隆（但这是 scan_applications 的返回值，必须返回 Vec）
-        let apps_vec: Vec<app_search::AppInfo> = (*apps).clone();
+        // 扫描完成后，更新缓存（持有锁的时间很短）
+        {
+            let mut cache_guard = lock_app_cache_safe(&cache);
+            *cache_guard = Some(Arc::new(apps_vec.clone()));
+            // 锁在这里自动释放
+        }
 
         // Save to disk cache (including builtin apps)
-        let app_data_dir = get_app_data_dir(&app_clone)?;
         let _ = app_search::windows::save_cache(&app_data_dir, &apps_vec);
 
         // No background icon extraction - icons will be extracted on-demand during search
@@ -668,21 +673,27 @@ pub async fn rescan_applications(app: tauri::AppHandle) -> Result<(), String> {
         
         let scan_result = async_runtime::spawn_blocking(move || -> Result<Vec<app_search::AppInfo>, String> {
             let cache = get_app_cache();
-            let mut cache_guard = lock_app_cache_safe(&cache);
+            
+            // Clear memory cache and disk cache
+            {
+                let mut cache_guard = lock_app_cache_safe(&cache);
+                *cache_guard = None;
+                // 锁在这里自动释放
+            }
 
-            // Clear memory cache
-            *cache_guard = None;
-
-            // Clear disk cache
             let app_data_dir = get_app_data_dir(&app_clone).map_err(|e| format!("获取应用数据目录失败: {}", e))?;
             let cache_file = app_search::windows::get_cache_file_path(&app_data_dir);
             let _ = fs::remove_file(&cache_file); // Ignore errors if file doesn't exist
 
-            // Force rescan with progress callback
+            // Force rescan with progress callback (在没有持有锁的情况下执行耗时的扫描)
             let apps_vec = app_search::windows::scan_start_menu(Some(tx))?;
 
-            // Cache the results (包装为 Arc)
-            *cache_guard = Some(Arc::new(apps_vec.clone()));
+            // Cache the results (快速更新缓存，持有锁的时间很短)
+            {
+                let mut cache_guard = lock_app_cache_safe(&cache);
+                *cache_guard = Some(Arc::new(apps_vec.clone()));
+                // 锁在这里自动释放
+            }
 
             // Save to disk cache
             let _ = app_search::windows::save_cache(&app_data_dir, &apps_vec);
@@ -1130,14 +1141,19 @@ pub async fn populate_app_icons(
         let max_to_process = limit.unwrap_or(100);
 
         let cache = get_app_cache();
-        let mut cache_guard = lock_app_cache_safe(&cache);
+        
+        // 快速获取应用列表的副本，然后立即释放锁
+        let mut apps: Vec<app_search::AppInfo> = {
+            let cache_guard = lock_app_cache_safe(&cache);
+            let apps_arc = cache_guard.as_ref().ok_or_else(|| {
+                "Applications not scanned yet. Call scan_applications first.".to_string()
+            })?;
+            // 克隆 Vec 以便修改
+            (**apps_arc).clone()
+            // 锁在这里自动释放
+        };
 
-        let apps_arc = cache_guard.as_ref().ok_or_else(|| {
-            "Applications not scanned yet. Call scan_applications first.".to_string()
-        })?;
-
-        // 克隆 Vec 以便修改（只在需要更新图标时才会发生）
-        let mut apps: Vec<app_search::AppInfo> = (**apps_arc).clone();
+        // 在没有持有锁的情况下提取图标（这是耗时操作）
         let mut processed = 0usize;
         let mut updated = false;
 
@@ -1208,8 +1224,12 @@ pub async fn populate_app_icons(
         }
 
         if updated {
-            // 更新缓存（用新的 Arc 替换）
-            *cache_guard = Some(Arc::new(apps.clone()));
+            // 快速更新缓存，持有锁的时间很短
+            {
+                let mut cache_guard = lock_app_cache_safe(&cache);
+                *cache_guard = Some(Arc::new(apps.clone()));
+                // 锁在这里自动释放
+            }
             let app_data_dir = get_app_data_dir(&app_clone)?;
             let _ = app_search::windows::save_cache(&app_data_dir, &apps);
         }
@@ -2867,189 +2887,398 @@ fn ensure_backup_path(path: &str, app_data_dir: &Path) -> Result<std::path::Path
 }
 
 /// 备份数据库到 app_data_dir/backups/re-fast-backup_yyyyMMdd_HHmmss.db
+/// 异步执行，避免大文件复制时阻塞主线程
 #[tauri::command]
-pub fn backup_database(app: tauri::AppHandle) -> Result<String, String> {
-    let app_data_dir = get_app_data_dir(&app)?;
-    let db_path = db::get_db_path(&app_data_dir);
-    if !db_path.exists() {
-        return Err("Database file not found".to_string());
-    }
-
-    let backup_dir = app_data_dir.join("backups");
-    fs::create_dir_all(&backup_dir)
-        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
-
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let backup_name = format!("re-fast-backup_{}.db", timestamp);
-    let backup_path = backup_dir.join(backup_name);
-
-    fs::copy(&db_path, &backup_path)
-        .map_err(|e| format!("Failed to copy database: {}", e))?;
-
-    Ok(backup_path
-        .to_string_lossy()
-        .to_string())
-}
-
-/// 删除指定的备份文件
-#[tauri::command]
-pub fn delete_backup(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let app_data_dir = get_app_data_dir(&app)?;
-    let target = ensure_backup_path(&path, &app_data_dir)?;
-
-    if !target.is_file() {
-        return Err("Backup file not found".to_string());
-    }
-
-    fs::remove_file(&target).map_err(|e| format!("Failed to delete backup: {}", e))
-}
-
-/// 用指定的备份覆盖当前数据库
-#[tauri::command]
-pub fn restore_backup(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    let app_data_dir = get_app_data_dir(&app)?;
-    let target = ensure_backup_path(&path, &app_data_dir)?;
-
-    if !target.is_file() {
-        return Err("Backup file not found".to_string());
-    }
-
-    let db_path = db::get_db_path(&app_data_dir);
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create database directory: {}", e))?;
-    }
-
-    fs::copy(&target, &db_path)
-        .map_err(|e| format!("Failed to restore database: {}", e))?;
-
-    Ok(db_path
-        .to_string_lossy()
-        .to_string())
-}
-
-/// 获取数据库备份版本列表
-#[tauri::command]
-pub fn list_backups(app: tauri::AppHandle) -> Result<DatabaseBackupList, String> {
-    let app_data_dir = get_app_data_dir(&app)?;
-    let backup_dir = app_data_dir.join("backups");
-
-    if !backup_dir.exists() {
-        return Ok(DatabaseBackupList {
-            dir: backup_dir.to_string_lossy().to_string(),
-            items: vec![],
-        });
-    }
-
-    let mut items = Vec::new();
-    for entry in fs::read_dir(&backup_dir)
-        .map_err(|e| format!("Failed to read backup directory: {}", e))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read backup entry: {}", e))?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
+pub async fn backup_database(app: tauri::AppHandle) -> Result<String, String> {
+    async_runtime::spawn_blocking(move || {
+        let app_data_dir = get_app_data_dir(&app)?;
+        let db_path = db::get_db_path(&app_data_dir);
+        if !db_path.exists() {
+            return Err("Database file not found".to_string());
         }
-        // 仅保留 .db 备份文件
-        if let Some(ext) = path.extension() {
-            if ext.to_string_lossy().to_lowercase() != "db" {
+
+        let backup_dir = app_data_dir.join("backups");
+        fs::create_dir_all(&backup_dir)
+            .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let backup_name = format!("re-fast-backup_{}.db", timestamp);
+        let backup_path = backup_dir.join(backup_name);
+
+        // 文件复制操作可能很慢（特别是大数据库），使用 spawn_blocking 避免阻塞
+        fs::copy(&db_path, &backup_path)
+            .map_err(|e| format!("Failed to copy database: {}", e))?;
+
+        Ok(backup_path
+            .to_string_lossy()
+            .to_string())
+    })
+    .await
+    .map_err(|e| format!("backup_database join error: {}", e))?
+}
+
+/// 删除指定的备份文件（异步，避免阻塞主线程）
+#[tauri::command]
+pub async fn delete_backup(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    async_runtime::spawn_blocking(move || {
+        let app_data_dir = get_app_data_dir(&app)?;
+        let target = ensure_backup_path(&path, &app_data_dir)?;
+
+        if !target.is_file() {
+            return Err("Backup file not found".to_string());
+        }
+
+        fs::remove_file(&target).map_err(|e| format!("Failed to delete backup: {}", e))
+    })
+    .await
+    .map_err(|e| format!("delete_backup join error: {}", e))?
+}
+
+/// 用指定的备份覆盖当前数据库（异步，避免阻塞主线程）
+#[tauri::command]
+pub async fn restore_backup(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    async_runtime::spawn_blocking(move || {
+        let app_data_dir = get_app_data_dir(&app)?;
+        let target = ensure_backup_path(&path, &app_data_dir)?;
+
+        if !target.is_file() {
+            return Err("Backup file not found".to_string());
+        }
+
+        let db_path = db::get_db_path(&app_data_dir);
+        if let Some(parent) = db_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create database directory: {}", e))?;
+        }
+
+        // 文件复制操作可能很慢，使用 spawn_blocking 避免阻塞
+        fs::copy(&target, &db_path)
+            .map_err(|e| format!("Failed to restore database: {}", e))?;
+
+        Ok(db_path
+            .to_string_lossy()
+            .to_string())
+    })
+    .await
+    .map_err(|e| format!("restore_backup join error: {}", e))?
+}
+
+/// 获取数据库备份版本列表（异步，避免阻塞主线程）
+#[tauri::command]
+pub async fn list_backups(app: tauri::AppHandle) -> Result<DatabaseBackupList, String> {
+    async_runtime::spawn_blocking(move || {
+        let app_data_dir = get_app_data_dir(&app)?;
+        let backup_dir = app_data_dir.join("backups");
+
+        if !backup_dir.exists() {
+            return Ok(DatabaseBackupList {
+                dir: backup_dir.to_string_lossy().to_string(),
+                items: vec![],
+            });
+        }
+
+        let mut items = Vec::new();
+        // 遍历目录可能很慢，使用 spawn_blocking 避免阻塞
+        for entry in fs::read_dir(&backup_dir)
+            .map_err(|e| format!("Failed to read backup directory: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read backup entry: {}", e))?;
+            let path = entry.path();
+            if !path.is_file() {
                 continue;
             }
+            // 仅保留 .db 备份文件
+            if let Some(ext) = path.extension() {
+                if ext.to_string_lossy().to_lowercase() != "db" {
+                    continue;
+                }
+            }
+
+            let metadata = entry
+                .metadata()
+                .map_err(|e| format!("Failed to read backup metadata: {}", e))?;
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+
+            items.push(DatabaseBackupInfo {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: path.to_string_lossy().to_string(),
+                size: metadata.len(),
+                modified,
+            });
         }
 
-        let metadata = entry
-            .metadata()
-            .map_err(|e| format!("Failed to read backup metadata: {}", e))?;
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
+        // 按修改时间降序排序
+        items.sort_by(|a, b| b.modified.unwrap_or(0).cmp(&a.modified.unwrap_or(0)));
 
-        items.push(DatabaseBackupInfo {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: path.to_string_lossy().to_string(),
-            size: metadata.len(),
-            modified,
-        });
-    }
-
-    // 按修改时间降序排序
-    items.sort_by(|a, b| b.modified.unwrap_or(0).cmp(&a.modified.unwrap_or(0)));
-
-    Ok(DatabaseBackupList {
-        dir: backup_dir.to_string_lossy().to_string(),
-        items,
+        Ok(DatabaseBackupList {
+            dir: backup_dir.to_string_lossy().to_string(),
+            items,
+        })
     })
+    .await
+    .map_err(|e| format!("list_backups join error: {}", e))?
 }
 
 /// 聚合索引状态，便于前端一次性获取
 #[tauri::command]
-pub fn get_index_status(app: tauri::AppHandle) -> Result<IndexStatus, String> {
+pub async fn get_index_status(app: tauri::AppHandle) -> Result<IndexStatus, String> {
     #[cfg(target_os = "windows")]
     {
-        let app_data_dir = get_app_data_dir(&app)?;
+        // 使用 spawn_blocking 避免阻塞主线程
+        async_runtime::spawn_blocking(move || {
+            let start_time = std::time::Instant::now();
+            crate::log!("IndexStatus", "========== 开始获取索引状态 ==========");
+            
+            let app_data_dir = get_app_data_dir(&app)?;
+            crate::log!("IndexStatus", "✓ 获取 app_data_dir 成功: {:?} (耗时: {}ms)", app_data_dir, start_time.elapsed().as_millis());
 
-        // Everything 状态
-        let (available, error) = everything_search::windows::check_everything_status();
-        let version = everything_search::windows::get_everything_version();
-        let path = everything_search::windows::get_everything_path()
-            .map(|p| p.to_string_lossy().to_string());
+            // Everything 状态
+            let everything_start = std::time::Instant::now();
+            crate::log!("IndexStatus", "→ 开始检查 Everything 状态...");
+            let (available, error) = everything_search::windows::check_everything_status();
+            let version = everything_search::windows::get_everything_version();
+            let path = everything_search::windows::get_everything_path()
+                .map(|p| p.to_string_lossy().to_string());
+            crate::log!("IndexStatus", "✓ Everything 状态检查完成 (可用: {}, 耗时: {}ms)", available, everything_start.elapsed().as_millis());
 
-        // 应用索引状态：缓存数量与文件时间
-        let cache_file_path = app_search::windows::get_cache_file_path(&app_data_dir);
-        let cache_mtime = fs::metadata(&cache_file_path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        let cache_file = cache_file_path.to_str().map(|s| s.to_string());
+            // 应用索引状态：缓存数量与文件时间
+            let apps_start = std::time::Instant::now();
+            crate::log!("IndexStatus", "→ 开始检查应用索引状态...");
+            let cache_file_path = app_search::windows::get_cache_file_path(&app_data_dir);
+            let cache_mtime = fs::metadata(&cache_file_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            let cache_file = cache_file_path.to_str().map(|s| s.to_string());
+            crate::log!("IndexStatus", "  - 缓存文件元数据读取完成 (耗时: {}ms)", apps_start.elapsed().as_millis());
 
-        let cache = get_app_cache();
-        let mut cache_guard = lock_app_cache_safe(&cache);
-        if cache_guard.is_none() {
-            if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
-                if !disk_cache.is_empty() {
-                    *cache_guard = Some(Arc::new(disk_cache));
+            let cache = get_app_cache();
+            let cache_lock_start = std::time::Instant::now();
+            crate::log!("IndexStatus", "  - 开始获取应用缓存锁（使用 try_lock 避免阻塞）...");
+            
+            // 使用 try_lock 避免阻塞，如果获取不到锁说明其他线程正在使用
+            let apps_total = match cache.try_lock() {
+                Ok(cache_guard) => {
+                    crate::log!("IndexStatus", "  - 应用缓存锁获取成功 (耗时: {}ms)", cache_lock_start.elapsed().as_millis());
+                    let count = cache_guard.as_ref().map_or(0, |v| v.len());
+                    
+                    // 如果缓存为空，尝试从磁盘加载
+                    if count == 0 {
+                        drop(cache_guard); // 先释放锁
+                        crate::log!("IndexStatus", "  - 缓存为空，尝试从磁盘加载...");
+                        let load_start = std::time::Instant::now();
+                        if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
+                            if !disk_cache.is_empty() {
+                                let disk_count = disk_cache.len();
+                                crate::log!("IndexStatus", "  - 从磁盘加载缓存成功，应用数: {} (耗时: {}ms)", disk_count, load_start.elapsed().as_millis());
+                                disk_count
+                            } else {
+                                crate::log!("IndexStatus", "  - 磁盘缓存为空 (耗时: {}ms)", load_start.elapsed().as_millis());
+                                0
+                            }
+                        } else {
+                            crate::log!("IndexStatus", "  - 从磁盘加载缓存失败 (耗时: {}ms)", load_start.elapsed().as_millis());
+                            0
+                        }
+                    } else {
+                        count
+                    }
                 }
-            }
-        }
-        let apps_total = cache_guard.as_ref().map_or(0, |v| v.len());
-        drop(cache_guard);
+                Err(_) => {
+                    // 获取锁失败，说明其他线程正在使用（可能正在扫描应用）
+                    crate::log!("IndexStatus", "  - 应用缓存锁被占用（可能正在扫描应用），从磁盘读取缓存数量 (耗时: {}ms)", cache_lock_start.elapsed().as_millis());
+                    let load_start = std::time::Instant::now();
+                    if let Ok(disk_cache) = app_search::windows::load_cache(&app_data_dir) {
+                        let count = disk_cache.len();
+                        crate::log!("IndexStatus", "  - 从磁盘读取缓存成功，应用数: {} (耗时: {}ms)", count, load_start.elapsed().as_millis());
+                        count
+                    } else {
+                        crate::log!("IndexStatus", "  - 从磁盘读取缓存失败 (耗时: {}ms)", load_start.elapsed().as_millis());
+                        0
+                    }
+                }
+            };
+            crate::log!("IndexStatus", "✓ 应用索引状态检查完成 (应用数: {}, 总耗时: {}ms)", apps_total, apps_start.elapsed().as_millis());
 
-        // 文件历史索引状态：改为 SQLite 文件
-        let history_db_path = db::get_db_path(&app_data_dir);
-        let history_mtime = fs::metadata(&history_db_path)
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        let history_total = file_history::get_history_count(&app_data_dir)?;
-        let history_path_str = history_db_path.to_str().map(|s| s.to_string());
+            // 文件历史索引状态：改为 SQLite 文件
+            let history_start = std::time::Instant::now();
+            crate::log!("IndexStatus", "→ 开始检查文件历史索引状态...");
+            let history_db_path = db::get_db_path(&app_data_dir);
+            let history_mtime = fs::metadata(&history_db_path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            crate::log!("IndexStatus", "  - 数据库文件元数据读取完成 (耗时: {}ms)", history_start.elapsed().as_millis());
+            
+            // 使用带超时的历史记录计数，避免数据库锁死
+            crate::log!("IndexStatus", "  - 开始查询历史记录数量（带 5 秒超时保护）...");
+            let count_start = std::time::Instant::now();
+            let history_total = match file_history::get_history_count(&app_data_dir) {
+                Ok(count) => {
+                    crate::log!("IndexStatus", "  - 历史记录数量查询成功: {} 条 (耗时: {}ms)", count, count_start.elapsed().as_millis());
+                    count
+                }
+                Err(e) => {
+                    crate::log!("IndexStatus", "  - ⚠ 历史记录数量查询失败: {} (耗时: {}ms)", e, count_start.elapsed().as_millis());
+                    0
+                }
+            };
+            let history_path_str = history_db_path.to_str().map(|s| s.to_string());
+            crate::log!("IndexStatus", "✓ 文件历史索引状态检查完成 (记录数: {}, 总耗时: {}ms)", history_total, history_start.elapsed().as_millis());
 
-        Ok(IndexStatus {
-            everything: IndexEverythingStatus {
-                available,
-                error,
-                version,
-                path,
-            },
-            applications: IndexApplicationsStatus {
-                total: apps_total,
-                cache_file,
-                cache_mtime,
-            },
-            file_history: IndexFileHistoryStatus {
-                total: history_total,
-                path: history_path_str,
-                mtime: history_mtime,
-            },
+            crate::log!("IndexStatus", "========== 索引状态获取完成（总耗时: {}ms）==========", start_time.elapsed().as_millis());
+            
+            Ok(IndexStatus {
+                everything: IndexEverythingStatus {
+                    available,
+                    error,
+                    version,
+                    path,
+                },
+                applications: IndexApplicationsStatus {
+                    total: apps_total,
+                    cache_file,
+                    cache_mtime,
+                },
+                file_history: IndexFileHistoryStatus {
+                    total: history_total,
+                    path: history_path_str,
+                    mtime: history_mtime,
+                },
+            })
         })
+        .await
+        .map_err(|e| format!("get_index_status join error: {}", e))?
     }
     #[cfg(not(target_os = "windows"))]
     {
         Err("get_index_status is only supported on Windows".to_string())
     }
+}
+
+/// 数据库健康检查命令
+/// 返回数据库是否可访问、是否有锁定、以及基本统计信息
+#[derive(Serialize)]
+pub struct DatabaseHealthStatus {
+    pub accessible: bool,
+    pub error_message: Option<String>,
+    pub db_path: Option<String>,
+    pub db_size_bytes: Option<u64>,
+    pub file_history_count: Option<usize>,
+    pub shortcuts_count: Option<usize>,
+    pub memos_count: Option<usize>,
+}
+
+#[tauri::command]
+pub async fn check_database_health(app: tauri::AppHandle) -> Result<DatabaseHealthStatus, String> {
+    async_runtime::spawn_blocking(move || {
+        let app_data_dir = match get_app_data_dir(&app) {
+            Ok(dir) => dir,
+            Err(e) => {
+                return Ok(DatabaseHealthStatus {
+                    accessible: false,
+                    error_message: Some(format!("无法获取应用数据目录: {}", e)),
+                    db_path: None,
+                    db_size_bytes: None,
+                    file_history_count: None,
+                    shortcuts_count: None,
+                    memos_count: None,
+                });
+            }
+        };
+
+        let db_path = db::get_db_path(&app_data_dir);
+        let db_path_str = db_path.to_string_lossy().to_string();
+        
+        // 检查数据库文件大小
+        let db_size = fs::metadata(&db_path).ok().map(|m| m.len());
+
+        // 尝试连接数据库（带超时保护）
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        let (tx, rx) = mpsc::channel();
+        let app_data_dir_clone = app_data_dir.clone();
+        
+        thread::spawn(move || {
+            let result = (|| -> Result<(usize, usize, usize), String> {
+                let conn = db::get_connection(&app_data_dir_clone)?;
+                
+                // 查询各表记录数
+                let file_history_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM file_history", [], |row| row.get(0))
+                    .map_err(|e| format!("查询 file_history 失败: {}", e))?;
+                
+                let shortcuts_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM shortcuts", [], |row| row.get(0))
+                    .map_err(|e| format!("查询 shortcuts 失败: {}", e))?;
+                
+                let memos_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM memos", [], |row| row.get(0))
+                    .map_err(|e| format!("查询 memos 失败: {}", e))?;
+                
+                Ok((file_history_count as usize, shortcuts_count as usize, memos_count as usize))
+            })();
+            let _ = tx.send(result);
+        });
+
+        // 等待结果，5 秒超时
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok((fh_count, sc_count, memo_count))) => {
+                Ok(DatabaseHealthStatus {
+                    accessible: true,
+                    error_message: None,
+                    db_path: Some(db_path_str),
+                    db_size_bytes: db_size,
+                    file_history_count: Some(fh_count),
+                    shortcuts_count: Some(sc_count),
+                    memos_count: Some(memo_count),
+                })
+            }
+            Ok(Err(e)) => {
+                Ok(DatabaseHealthStatus {
+                    accessible: false,
+                    error_message: Some(format!("数据库访问错误: {}", e)),
+                    db_path: Some(db_path_str),
+                    db_size_bytes: db_size,
+                    file_history_count: None,
+                    shortcuts_count: None,
+                    memos_count: None,
+                })
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Ok(DatabaseHealthStatus {
+                    accessible: false,
+                    error_message: Some("数据库访问超时 (可能被锁定或损坏)".to_string()),
+                    db_path: Some(db_path_str),
+                    db_size_bytes: db_size,
+                    file_history_count: None,
+                    shortcuts_count: None,
+                    memos_count: None,
+                })
+            }
+            Err(_) => {
+                Ok(DatabaseHealthStatus {
+                    accessible: false,
+                    error_message: Some("数据库检查线程异常".to_string()),
+                    db_path: Some(db_path_str),
+                    db_size_bytes: db_size,
+                    file_history_count: None,
+                    shortcuts_count: None,
+                    memos_count: None,
+                })
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("check_database_health join error: {}", e))?
 }
 
 #[tauri::command]
