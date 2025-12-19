@@ -1967,6 +1967,16 @@ pub fn update_file_history_name(
     })
 }
 
+#[tauri::command]
+pub fn update_open_history_remark(
+    key: String,
+    remark: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<open_history::OpenHistoryItem, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    open_history::update_item_remark(key, remark, &app_data_dir)
+}
+
 // ===== Memo commands =====
 
 #[tauri::command]
@@ -4544,6 +4554,12 @@ pub fn get_open_history(app: tauri::AppHandle) -> Result<std::collections::HashM
 pub fn delete_open_history(key: String, app: tauri::AppHandle) -> Result<(), String> {
     let app_data_dir = get_app_data_dir(&app)?;
     open_history::delete_open_history(key, &app_data_dir)
+}
+
+#[tauri::command]
+pub fn get_open_history_item(key: String, app: tauri::AppHandle) -> Result<Option<open_history::OpenHistoryItem>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    open_history::check_path_exists(&key, &app_data_dir)
 }
 
 #[tauri::command]

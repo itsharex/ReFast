@@ -228,3 +228,11 @@ export interface ClipboardItem {
   is_favorite: boolean;
 }
 
+export interface OpenHistoryItem {
+  key: string;
+  last_opened: number;
+  name?: string | null; // Display name or remark (备注存储在 name 字段中)
+  use_count: number;
+  is_folder?: boolean | null;
+}
+

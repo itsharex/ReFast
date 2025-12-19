@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct OpenHistoryItem {
     pub key: String,        // path or id that uniquely identifies the item
     pub last_opened: u64,   // Unix timestamp
-    pub name: Option<String>, // Display name (extracted from path/URL)
+    pub name: Option<String>, // Display name or remark (备注存储在 name 字段中)
     pub use_count: u64,     // Number of times this item was used
     pub is_folder: Option<bool>, // Whether this is a folder (for file paths)
 }
@@ -45,6 +45,7 @@ fn migrate_schema(conn: &mut rusqlite::Connection) -> Result<(), String> {
         conn.execute("ALTER TABLE open_history ADD COLUMN is_folder INTEGER", [])
             .map_err(|e| format!("Failed to add is_folder column: {}", e))?;
     }
+    
     Ok(())
 }
 
@@ -519,6 +520,37 @@ pub fn update_item_name(
         .ok_or_else(|| format!("Open history item not found: {}", key))?;
 
     item.name = Some(new_name);
+    item.last_opened = timestamp;
+
+    let item_clone = item.clone();
+    let state_clone = state.clone();
+    drop(state);
+
+    save_history_internal(&state_clone, app_data_dir)?;
+
+    Ok(item_clone)
+}
+
+// Update item remark (stored in name field)
+pub fn update_item_remark(
+    key: String,
+    new_remark: Option<String>,
+    app_data_dir: &Path,
+) -> Result<OpenHistoryItem, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Failed to get timestamp: {}", e))?
+        .as_secs();
+
+    let mut state = lock_history()?;
+    load_history_into(&mut state, app_data_dir)?;
+
+    let item = state
+        .get_mut(&key)
+        .ok_or_else(|| format!("Open history item not found: {}", key))?;
+
+    // Store remark in name field
+    item.name = new_remark;
     item.last_opened = timestamp;
 
     let item_clone = item.clone();

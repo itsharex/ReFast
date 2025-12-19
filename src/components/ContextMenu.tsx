@@ -9,6 +9,7 @@ interface ContextMenuProps {
   onDeleteMemo: (memoId: string) => Promise<void>;
   onOpenUrl: (url: string) => Promise<void>;
   onDeleteHistory?: (key: string) => Promise<void>;
+  onEditRemark?: (url: string) => Promise<void>;
   onCopyJson: (json: string) => Promise<void>;
   onCopyAiAnswer: (answer: string) => Promise<void>;
   query: string;
@@ -25,6 +26,7 @@ export function ContextMenu({
   onDeleteMemo,
   onOpenUrl,
   onDeleteHistory,
+  onEditRemark,
   onCopyJson,
   onCopyAiAnswer,
   query: _query,
@@ -180,6 +182,29 @@ export function ContextMenu({
           >
             打开链接
           </button>
+          {onEditRemark && (
+            <button
+              onClick={async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                try {
+                  await onEditRemark(menu.result.url!);
+                  onClose();
+                } catch (error) {
+                  console.error("Failed to edit remark:", error);
+                  alert(`修改备注失败: ${error}`);
+                  onClose();
+                }
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
+            >
+              修改备注
+            </button>
+          )}
           {onDeleteHistory && (
             <button
               onClick={async (e) => {

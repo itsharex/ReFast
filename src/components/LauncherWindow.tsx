@@ -149,6 +149,10 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
   const pendingJsonContentRef = useRef<string | null>(null);
   const [isPluginListModalOpen, setIsPluginListModalOpen] = useState(false);
   const [openHistory, setOpenHistory] = useState<Record<string, number>>({});
+  const [isRemarkModalOpen, setIsRemarkModalOpen] = useState(false);
+  const [editingRemarkUrl, setEditingRemarkUrl] = useState<string | null>(null);
+  const [remarkText, setRemarkText] = useState<string>("");
+  const [urlRemarks, setUrlRemarks] = useState<Record<string, string>>({});
   const [launchingAppPath, setLaunchingAppPath] = useState<string | null>(null); // 正在启动的应用路径
   const [pastedImagePath, setPastedImagePath] = useState<string | null>(null); // 粘贴的图片路径
   const [pastedImageDataUrl, setPastedImageDataUrl] = useState<string | null>(null); // 粘贴的图片 base64 data URL
@@ -690,6 +694,21 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
       try {
         const history = await tauriApi.getOpenHistory();
         setOpenHistory(history);
+        // 加载所有 URL 的备注信息（备注存储在 name 字段中）
+        const remarks: Record<string, string> = {};
+        for (const [key] of Object.entries(history)) {
+          if (key.startsWith('http://') || key.startsWith('https://')) {
+            try {
+              const item = await tauriApi.getOpenHistoryItem(key);
+              if (item?.name) {
+                remarks[key] = item.name;
+              }
+            } catch (error) {
+              // 忽略单个项加载失败
+            }
+          }
+        }
+        setUrlRemarks(remarks);
       } catch (error) {
         console.error("Failed to load open history:", error);
       }
@@ -4767,12 +4786,58 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
       // 重新加载 open history
       const history = await tauriApi.getOpenHistory();
       setOpenHistory(history);
+      // 删除备注
+      setUrlRemarks(prev => {
+        const newRemarks = { ...prev };
+        delete newRemarks[key];
+        return newRemarks;
+      });
       // combinedResults 会自动使用新的 openHistory，所以结果列表会自动更新
     } catch (error) {
       console.error("Failed to delete open history:", error);
       throw error;
     }
   }, [setOpenHistory]);
+
+  const handleEditRemark = useCallback(async (url: string) => {
+    try {
+      // 获取当前的备注（存储在 name 字段中）
+      const item = await tauriApi.getOpenHistoryItem(url);
+      setEditingRemarkUrl(url);
+      setRemarkText(item?.name || "");
+      setIsRemarkModalOpen(true);
+    } catch (error) {
+      console.error("Failed to get open history item:", error);
+      alert(`获取备注失败: ${error}`);
+    }
+  }, []);
+
+  const handleSaveRemark = useCallback(async () => {
+    if (!editingRemarkUrl) return;
+    try {
+      const remark = remarkText.trim() || null;
+      const updatedItem = await tauriApi.updateOpenHistoryRemark(editingRemarkUrl, remark);
+      // 更新本地备注状态（备注存储在 name 字段中）
+      setUrlRemarks(prev => {
+        const newRemarks = { ...prev };
+        if (updatedItem.name) {
+          newRemarks[editingRemarkUrl] = updatedItem.name;
+        } else {
+          delete newRemarks[editingRemarkUrl];
+        }
+        return newRemarks;
+      });
+      // 刷新 openHistory 以更新时间戳
+      const history = await tauriApi.getOpenHistory();
+      setOpenHistory(history);
+      setIsRemarkModalOpen(false);
+      setEditingRemarkUrl(null);
+      setRemarkText("");
+    } catch (error) {
+      console.error("Failed to update remark:", error);
+      alert(`保存备注失败: ${error}`);
+    }
+  }, [editingRemarkUrl, remarkText]);
 
   const processPastedPath = useCallback(async (trimmedPath: string) => {
     console.log("Processing path:", trimmedPath);
@@ -5993,13 +6058,21 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
                         </div>
                       )}
                       {result.type === "url" && (
-                        <div className="flex items-center gap-2 mt-1.5">
+                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                           <span
                             className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("url", isSelected)}`}
                             title="URL 历史记录"
                           >
                             URL 历史
                           </span>
+                          {result.url && urlRemarks[result.url] && (
+                            <span
+                              className={`text-xs px-2 py-1 rounded-md ${theme.metaText(isSelected)} bg-gray-100`}
+                              title={`备注: ${urlRemarks[result.url]}`}
+                            >
+                              📝 {urlRemarks[result.url]}
+                            </span>
+                          )}
                         </div>
                       )}
                       {result.type === "email" && (
@@ -6319,6 +6392,7 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
           await tauriApi.openUrl(url);
         }}
         onDeleteHistory={handleDeleteHistory}
+        onEditRemark={handleEditRemark}
         onCopyJson={async (json: string) => {
           await navigator.clipboard.writeText(json);
           alert("JSON 内容已复制到剪贴板");
@@ -6338,6 +6412,55 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
           setSelectedMemo(null);
         }}
       />
+
+      {/* Remark Edit Modal */}
+      {isRemarkModalOpen && editingRemarkUrl && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setIsRemarkModalOpen(false)}>
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold mb-4">修改备注</h2>
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-2">URL:</div>
+              <div className="text-sm text-gray-800 break-all mb-4">{editingRemarkUrl}</div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">备注:</label>
+              <textarea
+                value={remarkText}
+                onChange={(e) => setRemarkText(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                rows={4}
+                placeholder="输入备注信息..."
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setIsRemarkModalOpen(false);
+                    setEditingRemarkUrl(null);
+                    setRemarkText("");
+                  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    handleSaveRemark();
+                  }
+                }}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setIsRemarkModalOpen(false);
+                  setEditingRemarkUrl(null);
+                  setRemarkText("");
+                }}
+                className="px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveRemark}
+                className="px-4 py-2 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Memo Detail Modal */}
       <MemoModal

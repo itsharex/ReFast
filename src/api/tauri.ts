@@ -15,6 +15,7 @@ import type {
   UpdateCheckResult,
   DatabaseHealthStatus,
   ClipboardItem,
+  OpenHistoryItem,
 } from "../types";
 
 export const tauriApi = {
@@ -371,6 +372,14 @@ export const tauriApi = {
 
   async deleteOpenHistory(key: string): Promise<void> {
     return invoke("delete_open_history", { key });
+  },
+
+  async getOpenHistoryItem(key: string): Promise<OpenHistoryItem | null> {
+    return invoke("get_open_history_item", { key });
+  },
+
+  async updateOpenHistoryRemark(key: string, remark: string | null): Promise<OpenHistoryItem> {
+    return invoke("update_open_history_remark", { key, remark });
   },
 
   async showMemoWindow(): Promise<void> {
