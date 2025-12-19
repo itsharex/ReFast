@@ -182,6 +182,8 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
   const isMemoModalOpenRef = useRef(false);
   // 记录应用中心弹窗是否打开，用于全局 ESC 处理时优先关闭应用中心，而不是隐藏整个窗口
   const isPluginListModalOpenRef = useRef(false);
+  // 记录备注弹窗是否打开，用于全局 ESC 处理时优先关闭备注弹窗，而不是隐藏整个窗口
+  const isRemarkModalOpenRef = useRef(false);
   // 记录右键菜单是否打开，用于全局 ESC 处理时优先关闭右键菜单，而不是隐藏整个窗口
   const contextMenuRef = useRef<{ x: number; y: number; result: SearchResult } | null>(null);
   const shouldPreserveScrollRef = useRef(false); // 标记是否需要保持滚动位置
@@ -211,6 +213,10 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
   useEffect(() => {
     isPluginListModalOpenRef.current = isPluginListModalOpen;
   }, [isPluginListModalOpen]);
+
+  useEffect(() => {
+    isRemarkModalOpenRef.current = isRemarkModalOpen;
+  }, [isRemarkModalOpen]);
 
   useEffect(() => {
     contextMenuRef.current = contextMenu;
@@ -946,6 +952,16 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
         e.preventDefault();
         e.stopPropagation();
         setContextMenu(null);
+        return;
+      }
+      
+      // 如果备注弹窗已打开，优先关闭备注弹窗，不关闭启动器
+      if ((e.key === "Escape" || e.keyCode === 27) && isRemarkModalOpenRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsRemarkModalOpen(false);
+        setEditingRemarkUrl(null);
+        setRemarkText("");
         return;
       }
       
@@ -5255,6 +5271,13 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
         }, 100);
         return;
       }
+      // 如果备注弹窗已打开，只关闭备注弹窗，不关闭启动器
+      if (isRemarkModalOpen) {
+        setIsRemarkModalOpen(false);
+        setEditingRemarkUrl(null);
+        setRemarkText("");
+        return;
+      }
       await hideLauncherAndResetState({ resetMemo: true });
       return;
     }
@@ -6579,6 +6602,8 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
                     setIsRemarkModalOpen(false);
                     setEditingRemarkUrl(null);
                     setRemarkText("");
