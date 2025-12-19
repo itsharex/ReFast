@@ -4854,6 +4854,19 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
     }
   }, [contextMenu, query, refreshFileHistoryCache, setErrorMessage]);
 
+  const handleDeleteHistory = useCallback(async (key: string) => {
+    try {
+      await tauriApi.deleteOpenHistory(key);
+      // 重新加载 open history
+      const history = await tauriApi.getOpenHistory();
+      setOpenHistory(history);
+      // combinedResults 会自动使用新的 openHistory，所以结果列表会自动更新
+    } catch (error) {
+      console.error("Failed to delete open history:", error);
+      throw error;
+    }
+  }, [setOpenHistory]);
+
   const processPastedPath = useCallback(async (trimmedPath: string) => {
     console.log("Processing path:", trimmedPath);
     
@@ -6076,9 +6089,9 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
                         <div className="flex items-center gap-2 mt-1.5">
                           <span
                             className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${theme.tag("url", isSelected)}`}
-                            title="可打开的 URL"
+                            title="URL 历史记录"
                           >
-                            URL
+                            URL 历史
                           </span>
                         </div>
                       )}
@@ -6398,6 +6411,7 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
         onOpenUrl={async (url: string) => {
           await tauriApi.openUrl(url);
         }}
+        onDeleteHistory={handleDeleteHistory}
         onCopyJson={async (json: string) => {
           await navigator.clipboard.writeText(json);
           alert("JSON 内容已复制到剪贴板");

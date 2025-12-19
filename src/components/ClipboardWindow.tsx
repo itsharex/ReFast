@@ -274,60 +274,72 @@ export function ClipboardWindow() {
   }, [isEditing, selectedItem, handleClose]);
 
   return (
-    <div className="h-screen w-screen flex bg-gray-50">
+    <div className="h-screen w-screen flex bg-gradient-to-br from-gray-50 via-white to-gray-50">
       {/* Left Panel - List */}
-      <div className="w-2/5 border-r border-gray-200 bg-white flex flex-col">
+      <div className="w-2/5 border-r border-gray-200/60 bg-white/80 backdrop-blur-sm flex flex-col shadow-lg">
         {/* Header */}
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold text-gray-800">剪切板历史</h2>
+        <div className="p-5 border-b border-gray-200/60 bg-gradient-to-r from-white to-gray-50/50">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-md">
+                <span className="text-white text-lg">📋</span>
+              </div>
+              <h2 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent">
+                剪切板历史
+              </h2>
+            </div>
             <button
               onClick={() => setShowSettings(!showSettings)}
-              className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors"
+              className={`px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-all duration-200 ${
+                showSettings ? "bg-blue-50 text-blue-600" : ""
+              }`}
               title="设置"
             >
-              ⚙️
+              <span className="text-base">⚙️</span>
             </button>
           </div>
           
           {/* Search Box */}
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索剪切板内容..."
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-          />
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索剪切板内容..."
+              className="w-full px-4 py-2.5 pl-10 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-400 text-sm bg-white/80 shadow-sm transition-all duration-200 placeholder:text-gray-400"
+            />
+            <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+          </div>
         </div>
 
         {/* Filter Buttons */}
-        <div className="p-3 border-b border-gray-200 flex gap-2">
+        <div className="p-3 border-b border-gray-200/60 bg-white/50 flex gap-2">
           <button
             onClick={() => setContentTypeFilter("all")}
-            className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors border ${
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
               contentTypeFilter === "all"
-                ? "bg-blue-500 text-white border-blue-500"
-                : "text-gray-600 hover:bg-gray-50 border-gray-200"
+                ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/30 scale-105"
+                : "text-gray-600 hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:shadow-sm"
             }`}
           >
             全部
           </button>
           <button
             onClick={() => setContentTypeFilter("text")}
-            className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors border ${
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
               contentTypeFilter === "text"
-                ? "bg-blue-500 text-white border-blue-500"
-                : "text-gray-600 hover:bg-gray-50 border-gray-200"
+                ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/30 scale-105"
+                : "text-gray-600 hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:shadow-sm"
             }`}
           >
             文字
           </button>
           <button
             onClick={() => setContentTypeFilter("image")}
-            className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors border ${
+            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
               contentTypeFilter === "image"
-                ? "bg-blue-500 text-white border-blue-500"
-                : "text-gray-600 hover:bg-gray-50 border-gray-200"
+                ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md shadow-blue-500/30 scale-105"
+                : "text-gray-600 hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:shadow-sm"
             }`}
           >
             图片
@@ -336,9 +348,9 @@ export function ClipboardWindow() {
 
         {/* Settings Panel */}
         {showSettings && (
-          <div className="p-3 border-b border-gray-200 bg-gray-50">
+          <div className="p-4 border-b border-gray-200/60 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 backdrop-blur-sm">
             <div className="mb-2">
-              <label className="block text-xs font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
                 最大保存数量
               </label>
               <div className="flex items-center gap-2">
@@ -355,11 +367,11 @@ export function ClipboardWindow() {
                     const value = parseInt(e.target.value, 10) || 0;
                     saveMaxItems(value);
                   }}
-                  className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-400 bg-white shadow-sm"
                 />
-                <span className="text-xs text-gray-500">条</span>
+                <span className="text-sm text-gray-600 font-medium">条</span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
+              <p className="text-xs text-gray-500 mt-2 leading-relaxed">
                 超过此数量时自动删除最旧记录（0=不限制，收藏不受影响）
               </p>
             </div>
@@ -367,82 +379,97 @@ export function ClipboardWindow() {
         )}
 
         {/* Actions */}
-        <div className="p-3 border-b border-gray-200 flex gap-2">
+        <div className="p-3 border-b border-gray-200/60 bg-white/50 flex gap-2">
           <button
             onClick={loadClipboardItems}
-            className="flex-1 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors border border-blue-200"
+            className="flex-1 px-4 py-2 text-sm font-medium text-blue-600 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 rounded-lg transition-all duration-200 border border-blue-200 hover:border-blue-300 hover:shadow-sm"
           >
-            刷新
+            🔄 刷新
           </button>
           <button
             onClick={handleClearHistory}
-            className="flex-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded transition-colors border border-red-200"
+            className="flex-1 px-4 py-2 text-sm font-medium text-red-600 hover:bg-gradient-to-r hover:from-red-50 hover:to-pink-50 rounded-lg transition-all duration-200 border border-red-200 hover:border-red-300 hover:shadow-sm"
           >
-            清空历史
+            🗑️ 清空历史
           </button>
         </div>
 
         {/* List */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto p-2 bg-gradient-to-b from-white to-gray-50/30">
           {filteredItems.length === 0 ? (
-            <div className="p-4 text-sm text-gray-500 text-center">
-              {searchQuery
-                ? "没有找到匹配的内容"
-                : contentTypeFilter === "all"
-                ? "还没有剪切板历史"
-                : contentTypeFilter === "text"
-                ? "没有文字类型的记录"
-                : "没有图片类型的记录"}
+            <div className="flex flex-col items-center justify-center h-full text-center px-4">
+              <div className="text-6xl mb-4 opacity-50">📋</div>
+              <div className="text-base font-medium text-gray-600 mb-1">
+                {searchQuery
+                  ? "没有找到匹配的内容"
+                  : contentTypeFilter === "all"
+                  ? "还没有剪切板历史"
+                  : contentTypeFilter === "text"
+                  ? "没有文字类型的记录"
+                  : "没有图片类型的记录"}
+              </div>
+              {!searchQuery && contentTypeFilter === "all" && (
+                <div className="text-sm text-gray-400 mt-2">
+                  复制一些内容到这里查看
+                </div>
+              )}
             </div>
           ) : (
-            <div className="divide-y divide-gray-100">
+            <div className="space-y-2">
               {filteredItems.map((item) => (
                 <div
                   key={item.id}
                   onClick={() => setSelectedItem(item)}
-                  className={`p-3 cursor-pointer transition-colors hover:bg-gray-50 ${
-                    selectedItem?.id === item.id ? "bg-blue-50" : ""
+                  className={`group p-3 cursor-pointer transition-all duration-200 rounded-xl border ${
+                    selectedItem?.id === item.id
+                      ? "bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-300 shadow-md shadow-blue-200/30 scale-[1.02]"
+                      : "bg-white/80 border-gray-200/60 hover:border-blue-200/60 hover:bg-gradient-to-r hover:from-gray-50/80 hover:to-blue-50/30 hover:shadow-sm"
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-2 mb-1">
+                  <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <span className="text-xs text-gray-500">
+                      <span className="text-xs font-medium text-gray-500 bg-gray-100/80 px-2 py-0.5 rounded-md">
                         {formatDate(item.created_at)}
                       </span>
                       {item.is_favorite && (
-                        <span className="text-yellow-500 text-sm" title="收藏">
-                          ★
+                        <span className="text-yellow-500 text-base drop-shadow-sm" title="收藏">
+                          ⭐
                         </span>
                       )}
                     </div>
-                    <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
-                      {item.content_type}
+                    <span className={`text-xs px-2.5 py-1 rounded-md font-medium flex-shrink-0 ${
+                      item.content_type === "image"
+                        ? "bg-purple-100 text-purple-700"
+                        : "bg-blue-100 text-blue-700"
+                    }`}>
+                      {item.content_type === "image" ? "🖼️ 图片" : "📝 文字"}
                     </span>
                   </div>
                   {item.content_type === "image" ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
                       {imageDataUrls.has(item.content) ? (
                         <img 
                           src={imageDataUrls.get(item.content)} 
                           alt="clipboard" 
-                          className="w-10 h-10 object-cover rounded"
+                          className="w-12 h-12 object-cover rounded-lg shadow-sm border border-gray-200"
                         />
                       ) : (
                         <div 
-                          className="w-10 h-10 bg-gray-100 rounded flex items-center justify-center text-gray-400 text-xs"
+                          className="w-12 h-12 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center text-gray-400 text-xl cursor-pointer hover:from-gray-200 hover:to-gray-300 transition-all duration-200 shadow-sm border border-gray-200"
                           onClick={(e) => {
                             e.stopPropagation();
                             loadImageData(item.content);
                           }}
+                          title="点击加载图片"
                         >
                           📷
                         </div>
                       )}
-                      <span className="text-sm text-gray-600">图片</span>
+                      <span className="text-sm text-gray-600 font-medium">图片内容</span>
                     </div>
                   ) : (
-                    <div className="text-sm text-gray-800 truncate">
-                      {item.content || "(空内容)"}
+                    <div className="text-sm text-gray-800 line-clamp-2 leading-relaxed bg-gray-50/50 rounded-md p-2 border border-gray-100">
+                      {item.content || <span className="text-gray-400 italic">(空内容)</span>}
                     </div>
                   )}
                 </div>
@@ -453,31 +480,36 @@ export function ClipboardWindow() {
       </div>
 
       {/* Right Panel - Detail */}
-      <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col bg-gradient-to-br from-white via-gray-50/30 to-white min-w-0 overflow-hidden">
         {selectedItem ? (
           <>
             {/* Detail Header */}
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <h3 className="text-lg font-semibold text-gray-800">
-                  {isEditing ? "编辑内容" : "详细内容"}
-                </h3>
-                <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-600">
-                  {selectedItem.content_type}
-                </span>
-              </div>
-              <div className="flex gap-2">
+            <div className="p-4 sm:p-5 border-b border-gray-200/60 bg-gradient-to-r from-white to-gray-50/50 backdrop-blur-sm shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+                <div className="flex items-center gap-3 flex-shrink-0 min-w-0">
+                  <h3 className="text-base sm:text-lg font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent whitespace-nowrap">
+                    {isEditing ? "✏️ 编辑内容" : "📄 详细内容"}
+                  </h3>
+                  <span className={`text-xs px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg font-medium whitespace-nowrap flex-shrink-0 ${
+                    selectedItem.content_type === "image"
+                      ? "bg-purple-100 text-purple-700"
+                      : "bg-blue-100 text-blue-700"
+                  }`}>
+                    {selectedItem.content_type === "image" ? "🖼️ 图片" : "📝 文字"}
+                  </span>
+                </div>
+                <div className="flex gap-1.5 flex-wrap min-w-0">
                 {isEditing ? (
                   <>
                     <button
                       onClick={handleSaveEdit}
-                      className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                      className="px-2.5 py-1 text-xs font-medium bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 transition-all duration-200 shadow-md shadow-blue-500/30 hover:shadow-lg hover:shadow-blue-500/40 whitespace-nowrap flex-shrink-0"
                     >
-                      保存
+                      ✓ 保存
                     </button>
                     <button
                       onClick={handleCancelEdit}
-                      className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                      className="px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-all duration-200 border border-gray-200 hover:border-gray-300 whitespace-nowrap flex-shrink-0"
                     >
                       取消
                     </button>
@@ -485,71 +517,94 @@ export function ClipboardWindow() {
                 ) : (
                   <>
                     {selectedItem.content_type === "text" && (
-                      <button
-                        onClick={() => handleEdit(selectedItem)}
-                        className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                      >
-                        编辑
-                      </button>
+                    <button
+                      onClick={() => handleEdit(selectedItem)}
+                      className="px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 rounded-lg transition-all duration-200 border border-blue-200 hover:border-blue-300 hover:shadow-sm whitespace-nowrap flex-shrink-0"
+                    >
+                      ✏️ 编辑
+                    </button>
                     )}
                     <button
                       onClick={() => handleToggleFavorite(selectedItem)}
-                      className={`px-3 py-1.5 text-sm rounded transition-colors ${
+                      className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all duration-200 border whitespace-nowrap flex-shrink-0 ${
                         selectedItem.is_favorite
-                          ? "text-yellow-600 hover:bg-yellow-50"
-                          : "text-gray-600 hover:bg-gray-100"
+                          ? "text-yellow-700 bg-yellow-50 border-yellow-200 hover:bg-yellow-100 shadow-sm"
+                          : "text-gray-600 hover:bg-gray-50 border-gray-200 hover:border-gray-300"
                       }`}
                     >
-                      {selectedItem.is_favorite ? "取消收藏" : "收藏"}
+                      {selectedItem.is_favorite ? "⭐ 取消收藏" : "☆ 收藏"}
                     </button>
                     <button
                       onClick={() => handleCopyToClipboard(selectedItem)}
-                      className="px-3 py-1.5 text-sm text-green-600 hover:bg-green-50 rounded transition-colors"
+                      className="px-2.5 py-1 text-xs font-medium text-green-600 hover:bg-gradient-to-r hover:from-green-50 hover:to-emerald-50 rounded-lg transition-all duration-200 border border-green-200 hover:border-green-300 hover:shadow-sm whitespace-nowrap flex-shrink-0"
                     >
-                      复制
+                      📋 复制
                     </button>
                     <button
                       onClick={() => handleDelete(selectedItem)}
-                      className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded transition-colors"
+                      className="px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-gradient-to-r hover:from-red-50 hover:to-pink-50 rounded-lg transition-all duration-200 border border-red-200 hover:border-red-300 hover:shadow-sm whitespace-nowrap flex-shrink-0"
                     >
-                      删除
+                      🗑️ 删除
                     </button>
                   </>
                 )}
+                </div>
               </div>
             </div>
 
             {/* Detail Content */}
-            <div className="flex-1 overflow-y-auto p-4 min-h-0">
+            <div className="flex-1 overflow-y-auto p-6 min-h-0 bg-gradient-to-b from-white to-gray-50/20">
               {isEditing ? (
-                <textarea
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  className="w-full h-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-sm"
-                  placeholder="输入内容..."
-                />
+                <div className="h-full">
+                  <textarea
+                    value={editContent}
+                    onChange={(e) => setEditContent(e.target.value)}
+                    className="w-full h-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-400 resize-none font-mono text-sm bg-white shadow-inner transition-all duration-200"
+                    placeholder="输入内容..."
+                  />
+                </div>
               ) : (
-                <div className="w-full">
-                  <div className="mb-3 text-xs text-gray-500 flex-shrink-0">
-                    创建时间: {new Date(selectedItem.created_at * 1000).toLocaleString()}
+                <div className="w-full h-full flex flex-col">
+                  <div className="mb-4 px-4 py-2.5 text-sm text-gray-600 bg-gradient-to-r from-gray-50 to-blue-50/50 rounded-lg border border-gray-200/60 flex-shrink-0">
+                    <span className="font-medium">🕐 创建时间:</span>{" "}
+                    <span className="text-gray-700">
+                      {new Date(selectedItem.created_at * 1000).toLocaleString("zh-CN", {
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
                   </div>
                   {selectedItem.content_type === "image" ? (
-                    <div className="flex items-center justify-center min-h-[calc(100%-2rem)]">
+                    <div className="flex-1 flex items-center justify-center min-h-0 bg-gradient-to-br from-gray-50/50 to-blue-50/30 rounded-xl border-2 border-dashed border-gray-200 p-8">
                       {imageDataUrls.has(selectedItem.content) ? (
-                        <img 
-                          src={imageDataUrls.get(selectedItem.content)} 
-                          alt="clipboard" 
-                          className="max-w-full max-h-full object-contain rounded-lg shadow-lg"
-                        />
+                        <div className="relative max-w-full max-h-full">
+                          <img 
+                            src={imageDataUrls.get(selectedItem.content)} 
+                            alt="clipboard" 
+                            className="max-w-full max-h-full object-contain rounded-xl shadow-2xl border border-gray-200/60"
+                          />
+                          <div className="absolute inset-0 rounded-xl bg-gradient-to-t from-black/10 to-transparent pointer-events-none"></div>
+                        </div>
                       ) : (
-                        <div className="text-gray-400">加载图片中...</div>
+                        <div className="flex flex-col items-center gap-3 text-gray-400">
+                          <div className="text-5xl animate-pulse">📷</div>
+                          <div className="text-base font-medium">加载图片中...</div>
+                        </div>
                       )}
                     </div>
                   ) : (
-                    <div className="bg-gray-50 rounded-lg p-3">
-                      <pre className="whitespace-pre-wrap break-words font-mono text-sm text-gray-800 m-0">
-                        {selectedItem.content || "(空内容)"}
-                      </pre>
+                    <div className="flex-1 min-h-0 bg-white rounded-xl border-2 border-gray-200/60 shadow-inner overflow-hidden">
+                      <div className="h-full overflow-y-auto p-5">
+                        <pre className="whitespace-pre-wrap break-words font-mono text-sm text-gray-800 leading-relaxed m-0">
+                          {selectedItem.content || (
+                            <span className="text-gray-400 italic">(空内容)</span>
+                          )}
+                        </pre>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -557,10 +612,15 @@ export function ClipboardWindow() {
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <div className="text-4xl mb-2">📋</div>
-              <div className="text-sm">选择一条剪切板记录查看详情</div>
+          <div className="flex-1 flex items-center justify-center bg-gradient-to-br from-gray-50/50 via-blue-50/30 to-purple-50/20">
+            <div className="text-center px-8">
+              <div className="text-7xl mb-6 opacity-60 animate-bounce">📋</div>
+              <div className="text-lg font-semibold text-gray-600 mb-2">
+                选择一条剪切板记录查看详情
+              </div>
+              <div className="text-sm text-gray-400">
+                从左侧列表中选择一条记录以查看完整内容
+              </div>
             </div>
           </div>
         )}

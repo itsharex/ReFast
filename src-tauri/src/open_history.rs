@@ -120,6 +120,24 @@ pub fn get_all_history(app_data_dir: &Path) -> Result<HashMap<String, u64>, Stri
     Ok(state.clone())
 }
 
+pub fn delete_open_history(key: String, app_data_dir: &Path) -> Result<(), String> {
+    let mut state = lock_history()?;
+    load_history_into(&mut state, app_data_dir)?;
+
+    state
+        .remove(&key)
+        .ok_or_else(|| format!("Open history item not found: {}", key))?;
+
+    // Clone the state for saving (we need to release the lock first)
+    let state_clone = state.clone();
+    drop(state); // Release lock before calling save_history_internal
+
+    // Save to disk (save_history_internal doesn't lock)
+    save_history_internal(&state_clone, app_data_dir)?;
+
+    Ok(())
+}
+
 fn maybe_migrate_from_json(
     conn: &mut rusqlite::Connection,
     app_data_dir: &Path,

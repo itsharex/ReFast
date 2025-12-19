@@ -368,6 +368,10 @@ export const tauriApi = {
     return invoke("get_open_history");
   },
 
+  async deleteOpenHistory(key: string): Promise<void> {
+    return invoke("delete_open_history", { key });
+  },
+
   async showMemoWindow(): Promise<void> {
     return invoke("show_memo_window");
   },

@@ -4471,6 +4471,12 @@ pub fn get_open_history(app: tauri::AppHandle) -> Result<std::collections::HashM
 }
 
 #[tauri::command]
+pub fn delete_open_history(key: String, app: tauri::AppHandle) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    open_history::delete_open_history(key, &app_data_dir)
+}
+
+#[tauri::command]
 pub fn record_plugin_usage(
     plugin_id: String,
     name: Option<String>,

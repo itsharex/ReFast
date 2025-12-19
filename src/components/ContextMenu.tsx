@@ -8,6 +8,7 @@ interface ContextMenuProps {
   onEditMemo: () => void;
   onDeleteMemo: (memoId: string) => Promise<void>;
   onOpenUrl: (url: string) => Promise<void>;
+  onDeleteHistory?: (key: string) => Promise<void>;
   onCopyJson: (json: string) => Promise<void>;
   onCopyAiAnswer: (answer: string) => Promise<void>;
   query: string;
@@ -23,6 +24,7 @@ export function ContextMenu({
   onEditMemo,
   onDeleteMemo,
   onOpenUrl,
+  onDeleteHistory,
   onCopyJson,
   onCopyAiAnswer,
   query: _query,
@@ -156,27 +158,52 @@ export function ContextMenu({
         </>
       )}
       {hasUrlMenu && (
-        <button
-          onClick={async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            try {
-              await onOpenUrl(menu.result.url!);
-              onClose();
-            } catch (error) {
-              console.error("Failed to open URL:", error);
-              alert(`打开链接失败: ${error}`);
-              onClose();
-            }
-          }}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
-        >
-          打开链接
-        </button>
+        <>
+          <button
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                await onOpenUrl(menu.result.url!);
+                onClose();
+              } catch (error) {
+                console.error("Failed to open URL:", error);
+                alert(`打开链接失败: ${error}`);
+                onClose();
+              }
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            className="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 transition-colors"
+          >
+            打开链接
+          </button>
+          {onDeleteHistory && (
+            <button
+              onClick={async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                try {
+                  await onDeleteHistory(menu.result.url!);
+                  onClose();
+                } catch (error) {
+                  console.error("Failed to delete history:", error);
+                  alert(`删除历史记录失败: ${error}`);
+                  onClose();
+                }
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+            >
+              删除历史记录
+            </button>
+          )}
+        </>
       )}
       {hasJsonMenu && (
         <button

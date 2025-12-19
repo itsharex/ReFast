@@ -687,6 +687,7 @@ fn main() {
             open_url,
             record_open_history,
             get_open_history,
+            delete_open_history,
             record_plugin_usage,
             get_plugin_usage,
             show_memo_window,
