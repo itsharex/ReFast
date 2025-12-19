@@ -8,6 +8,7 @@ export function ClipboardWindow() {
   const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([]);
   const [filteredItems, setFilteredItems] = useState<ClipboardItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [contentTypeFilter, setContentTypeFilter] = useState<"all" | "text" | "image">("all");
   const [selectedItem, setSelectedItem] = useState<ClipboardItem | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
@@ -85,16 +86,23 @@ export function ClipboardWindow() {
   }, [filteredItems]);
 
   useEffect(() => {
-    if (searchQuery.trim() === "") {
-      setFilteredItems(clipboardItems);
-    } else {
+    let filtered = clipboardItems;
+
+    // 按内容类型筛选
+    if (contentTypeFilter !== "all") {
+      filtered = filtered.filter((item) => item.content_type === contentTypeFilter);
+    }
+
+    // 按搜索关键词筛选
+    if (searchQuery.trim() !== "") {
       const query = searchQuery.toLowerCase();
-      const filtered = clipboardItems.filter((item) =>
+      filtered = filtered.filter((item) =>
         item.content.toLowerCase().includes(query)
       );
-      setFilteredItems(filtered);
     }
-  }, [searchQuery, clipboardItems]);
+
+    setFilteredItems(filtered);
+  }, [searchQuery, contentTypeFilter, clipboardItems]);
 
   const handleClose = useCallback(async () => {
     const window = getCurrentWindow();
@@ -266,6 +274,40 @@ export function ClipboardWindow() {
           />
         </div>
 
+        {/* Filter Buttons */}
+        <div className="p-3 border-b border-gray-200 flex gap-2">
+          <button
+            onClick={() => setContentTypeFilter("all")}
+            className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors border ${
+              contentTypeFilter === "all"
+                ? "bg-blue-500 text-white border-blue-500"
+                : "text-gray-600 hover:bg-gray-50 border-gray-200"
+            }`}
+          >
+            全部
+          </button>
+          <button
+            onClick={() => setContentTypeFilter("text")}
+            className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors border ${
+              contentTypeFilter === "text"
+                ? "bg-blue-500 text-white border-blue-500"
+                : "text-gray-600 hover:bg-gray-50 border-gray-200"
+            }`}
+          >
+            文字
+          </button>
+          <button
+            onClick={() => setContentTypeFilter("image")}
+            className={`flex-1 px-3 py-1.5 text-sm rounded transition-colors border ${
+              contentTypeFilter === "image"
+                ? "bg-blue-500 text-white border-blue-500"
+                : "text-gray-600 hover:bg-gray-50 border-gray-200"
+            }`}
+          >
+            图片
+          </button>
+        </div>
+
         {/* Actions */}
         <div className="p-3 border-b border-gray-200 flex gap-2">
           <button
@@ -286,7 +328,13 @@ export function ClipboardWindow() {
         <div className="flex-1 overflow-y-auto">
           {filteredItems.length === 0 ? (
             <div className="p-4 text-sm text-gray-500 text-center">
-              {searchQuery ? "没有找到匹配的内容" : "还没有剪切板历史"}
+              {searchQuery
+                ? "没有找到匹配的内容"
+                : contentTypeFilter === "all"
+                ? "还没有剪切板历史"
+                : contentTypeFilter === "text"
+                ? "没有文字类型的记录"
+                : "没有图片类型的记录"}
             </div>
           ) : (
             <div className="divide-y divide-gray-100">
@@ -347,7 +395,7 @@ export function ClipboardWindow() {
       </div>
 
       {/* Right Panel - Detail */}
-      <div className="flex-1 flex flex-col bg-white">
+      <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden">
         {selectedItem ? (
           <>
             {/* Detail Header */}
@@ -414,7 +462,7 @@ export function ClipboardWindow() {
             </div>
 
             {/* Detail Content */}
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto p-4 min-h-0">
               {isEditing ? (
                 <textarea
                   value={editContent}
@@ -423,12 +471,12 @@ export function ClipboardWindow() {
                   placeholder="输入内容..."
                 />
               ) : (
-                <div className="w-full h-full">
-                  <div className="mb-3 text-xs text-gray-500">
+                <div className="w-full">
+                  <div className="mb-3 text-xs text-gray-500 flex-shrink-0">
                     创建时间: {new Date(selectedItem.created_at * 1000).toLocaleString()}
                   </div>
                   {selectedItem.content_type === "image" ? (
-                    <div className="flex items-center justify-center h-full">
+                    <div className="flex items-center justify-center min-h-[calc(100%-2rem)]">
                       {imageDataUrls.has(selectedItem.content) ? (
                         <img 
                           src={imageDataUrls.get(selectedItem.content)} 
@@ -440,9 +488,11 @@ export function ClipboardWindow() {
                       )}
                     </div>
                   ) : (
-                    <pre className="whitespace-pre-wrap break-words font-mono text-sm text-gray-800 p-3 bg-gray-50 rounded-lg">
-                      {selectedItem.content || "(空内容)"}
-                    </pre>
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <pre className="whitespace-pre-wrap break-words font-mono text-sm text-gray-800 m-0">
+                        {selectedItem.content || "(空内容)"}
+                      </pre>
+                    </div>
                   )}
                 </div>
               )}

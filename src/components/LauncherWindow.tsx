@@ -1643,7 +1643,42 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
       }));
     
     
-    const urlResults: SearchResult[] = detectedUrls.map((url) => ({
+    // 从 openHistory 中提取 URL 历史记录（仅在查询不为空时）
+    const historyUrls: Array<{ url: string; timestamp: number }> = [];
+    const queryLower = query.toLowerCase().trim();
+    const detectedUrlsSet = new Set(detectedUrls.map(url => url.toLowerCase()));
+    
+    // 只在有查询时才从历史记录中搜索 URL
+    if (queryLower) {
+      // 遍历 openHistory，提取所有 URL（以 http:// 或 https:// 开头）
+      for (const [key, timestamp] of Object.entries(openHistory)) {
+        const keyLower = key.toLowerCase();
+        if ((keyLower.startsWith('http://') || keyLower.startsWith('https://')) && 
+            !detectedUrlsSet.has(keyLower)) {
+          // URL 包含查询内容，则添加到历史 URL 列表
+          if (keyLower.includes(queryLower)) {
+            historyUrls.push({ url: key, timestamp });
+          }
+        }
+      }
+      
+      // 按最近使用时间排序（最新的在前）
+      historyUrls.sort((a, b) => b.timestamp - a.timestamp);
+    }
+    
+    // 合并检测到的 URL 和历史 URL，去重（检测到的 URL 优先）
+    const allUrlsSet = new Set(detectedUrls.map(url => url.toLowerCase()));
+    const allUrls: string[] = [...detectedUrls];
+    
+    // 添加历史 URL（避免重复）
+    for (const { url } of historyUrls) {
+      if (!allUrlsSet.has(url.toLowerCase())) {
+        allUrls.push(url);
+        allUrlsSet.add(url.toLowerCase());
+      }
+    }
+    
+    const urlResults: SearchResult[] = allUrls.map((url) => ({
       type: "url" as const,
       url,
       displayName: url,
