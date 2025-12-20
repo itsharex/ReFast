@@ -28,7 +28,9 @@ export function WordbookPanel({
 }: WordbookPanelProps) {
   // 单词本相关状态
   const [wordRecords, setWordRecords] = useState<WordRecord[]>([]);
+  const [allWordRecords, setAllWordRecords] = useState<WordRecord[]>([]); // 保存所有单词记录用于筛选
   const [wordSearchQuery, setWordSearchQuery] = useState("");
+  const [masteryFilter, setMasteryFilter] = useState<number | null>(null); // null表示全部，0-5表示具体熟练度
   const [isWordLoading, setIsWordLoading] = useState(false);
   
   // 编辑相关状态（如果父组件提供了状态，使用父组件的；否则使用本地状态）
@@ -66,34 +68,60 @@ export function WordbookPanel({
   const [aiQueryWord, setAiQueryWord] = useState<string>(""); // 用于AI查词的单词
   const [hasAutoSaved, setHasAutoSaved] = useState(false); // 标记是否已自动保存
 
+
+  // 应用筛选条件
+  const applyFilters = useCallback((records: WordRecord[], query: string, mastery: number | null) => {
+    let filtered = records;
+
+    // 应用搜索筛选
+    if (query.trim()) {
+      const lowerQuery = query.trim().toLowerCase();
+      filtered = filtered.filter(
+        (record) =>
+          record.word.toLowerCase().includes(lowerQuery) ||
+          record.translation.toLowerCase().includes(lowerQuery)
+      );
+    }
+
+    // 应用熟练度筛选
+    if (mastery !== null) {
+      filtered = filtered.filter((record) => record.masteryLevel === mastery);
+    }
+
+    setWordRecords(filtered);
+  }, []);
+
   // 单词本相关函数
   const loadWordRecords = useCallback(async () => {
     setIsWordLoading(true);
     try {
       const list = await tauriApi.getAllWordRecords();
-      setWordRecords(list);
+      setAllWordRecords(list);
+      applyFilters(list, wordSearchQuery, masteryFilter);
     } catch (error) {
       console.error("Failed to load word records:", error);
     } finally {
       setIsWordLoading(false);
     }
-  }, []);
+  }, [wordSearchQuery, masteryFilter, applyFilters]);
 
   const handleWordSearch = useCallback(async (query: string) => {
     if (!query.trim()) {
-      loadWordRecords();
+      // 如果没有搜索词，使用所有记录进行筛选
+      applyFilters(allWordRecords, "", masteryFilter);
       return;
     }
     setIsWordLoading(true);
     try {
       const results = await tauriApi.searchWordRecords(query.trim());
-      setWordRecords(results);
+      setAllWordRecords(results);
+      applyFilters(results, query.trim(), masteryFilter);
     } catch (error) {
       console.error("Failed to search word records:", error);
     } finally {
       setIsWordLoading(false);
     }
-  }, [loadWordRecords]);
+  }, [allWordRecords, masteryFilter, applyFilters]);
 
   // 防抖搜索
   useEffect(() => {
@@ -105,6 +133,11 @@ export function WordbookPanel({
       clearTimeout(timeoutId);
     };
   }, [wordSearchQuery, handleWordSearch]);
+
+  // 熟练度筛选变化时重新应用筛选
+  useEffect(() => {
+    applyFilters(allWordRecords, wordSearchQuery, masteryFilter);
+  }, [masteryFilter, allWordRecords, wordSearchQuery, applyFilters]);
 
   // 切换到单词本标签页时加载数据
   useEffect(() => {
@@ -146,6 +179,9 @@ export function WordbookPanel({
         null
       );
 
+      setAllWordRecords((records) =>
+        records.map((r) => (r.id === updated.id ? updated : r))
+      );
       setWordRecords((records) =>
         records.map((r) => (r.id === updated.id ? updated : r))
       );
@@ -189,6 +225,35 @@ export function WordbookPanel({
       }
     }
   }, [loadWordRecords]);
+
+  // 快速更新熟练度
+  const handleQuickUpdateMastery = useCallback(async (id: string, newLevel: number) => {
+    if (newLevel < 0 || newLevel > 5) return;
+    
+    try {
+      const updated = await tauriApi.updateWordRecord(
+        id,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        newLevel,
+        null,
+        null
+      );
+      setAllWordRecords((records) =>
+        records.map((r) => (r.id === updated.id ? updated : r))
+      );
+      setWordRecords((records) =>
+        records.map((r) => (r.id === updated.id ? updated : r))
+      );
+    } catch (error) {
+      console.error("Failed to update mastery level:", error);
+      alert("更新失败：" + (error instanceof Error ? error.message : String(error)));
+    }
+  }, []);
 
   // 关闭AI解释弹窗的统一处理
   const handleCloseAiExplanation = useCallback(() => {
@@ -781,37 +846,122 @@ export function WordbookPanel({
     <>
       {/* 搜索栏 */}
       <div className="p-4 bg-white border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={wordSearchQuery}
-            onChange={(e) => setWordSearchQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && wordSearchQuery.trim()) {
-                handleAiQuery(wordSearchQuery.trim());
-              }
-            }}
-            placeholder="搜索单词或翻译..."
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          {wordSearchQuery.trim() && (
-            <button
-              onClick={() => handleAiQuery(wordSearchQuery.trim())}
-              className="px-4 py-2 text-sm bg-purple-500 text-white hover:bg-purple-600 rounded-md transition-colors"
-              title="使用AI查询单词"
-            >
-              AI查词
-            </button>
-          )}
-          {wordSearchQuery && (
-            <button
-              onClick={() => {
-                setWordSearchQuery("");
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={wordSearchQuery}
+              onChange={(e) => setWordSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && wordSearchQuery.trim()) {
+                  handleAiQuery(wordSearchQuery.trim());
+                }
               }}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
-            >
-              清除
-            </button>
+              placeholder="搜索单词或翻译..."
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {wordSearchQuery.trim() && (
+              <button
+                onClick={() => handleAiQuery(wordSearchQuery.trim())}
+                className="px-4 py-2 text-sm bg-purple-500 text-white hover:bg-purple-600 rounded-md transition-colors"
+                title="使用AI查询单词"
+              >
+                AI查词
+              </button>
+            )}
+            {wordSearchQuery && (
+              <button
+                onClick={() => {
+                  setWordSearchQuery("");
+                }}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
+              >
+                清除
+              </button>
+            )}
+          </div>
+          {/* 熟练度筛选 */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600 whitespace-nowrap">熟练度筛选:</span>
+            <div className="flex items-center gap-1 flex-wrap">
+              <button
+                onClick={() => setMasteryFilter(null)}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                  masteryFilter === null
+                    ? "bg-blue-500 text-white"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+                title="显示全部"
+              >
+                全部
+              </button>
+              {[0, 1, 2, 3, 4, 5].map((level) => (
+                <button
+                  key={level}
+                  onClick={() => setMasteryFilter(level)}
+                  className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                    masteryFilter === level
+                      ? "bg-blue-500 text-white"
+                      : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  }`}
+                  title={`熟练度 ${level}/5`}
+                >
+                  {level}/5
+                </button>
+              ))}
+            </div>
+            {masteryFilter !== null && (
+              <button
+                onClick={() => setMasteryFilter(null)}
+                className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                title="清除筛选"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {/* 熟练度统计 */}
+          {allWordRecords.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-gray-200">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="text-xs text-gray-600">
+                  <span className="font-medium">总计:</span> {allWordRecords.length} 个单词
+                </div>
+                <div className="text-xs text-gray-600">
+                  <span className="font-medium">已掌握:</span> {allWordRecords.filter((r) => r.isMastered).length}
+                </div>
+                <div className="text-xs text-gray-600">
+                  <span className="font-medium">收藏:</span> {allWordRecords.filter((r) => r.isFavorite).length}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-gray-600 font-medium">熟练度分布:</span>
+                  {[0, 1, 2, 3, 4, 5].map((level) => {
+                    const count = allWordRecords.filter((r) => r.masteryLevel === level).length;
+                    const percentage = allWordRecords.length > 0 ? (count / allWordRecords.length) * 100 : 0;
+                    return (
+                      <div key={level} className="flex items-center gap-1">
+                        <span className="text-xs text-gray-500">{level}/5:</span>
+                        <span className="text-xs font-medium text-gray-700">{count}</span>
+                        <div className="w-12 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              level === 0
+                                ? "bg-gray-400"
+                                : level <= 2
+                                ? "bg-yellow-400"
+                                : level <= 4
+                                ? "bg-blue-400"
+                                : "bg-green-500"
+                            }`}
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -853,16 +1003,54 @@ export function WordbookPanel({
                         <span className="text-green-500 text-sm">✓ 已掌握</span>
                       )}
                     </div>
-                    <div className="text-gray-700 mb-2">{record.translation}</div>
+                    <div className="text-gray-700 mb-2 prose prose-sm max-w-none">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }: any) => <p className="mb-1 last:mb-0">{children}</p>,
+                          ul: ({ children }: any) => <ul className="list-disc list-inside mb-1 space-y-0.5">{children}</ul>,
+                          ol: ({ children }: any) => <ol className="list-decimal list-inside mb-1 space-y-0.5">{children}</ol>,
+                          li: ({ children }: any) => <li className="ml-1">{children}</li>,
+                          strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+                          em: ({ children }: any) => <em className="italic">{children}</em>,
+                          code: ({ inline, children }: any) => 
+                            inline ? (
+                              <code className="bg-gray-100 px-1 py-0.5 rounded text-xs font-mono">{children}</code>
+                            ) : (
+                              <code className="block bg-gray-100 p-2 rounded text-xs font-mono overflow-x-auto mb-1">{children}</code>
+                            ),
+                        }}
+                      >
+                        {record.translation}
+                      </ReactMarkdown>
+                    </div>
                     {record.context && (
-                      <div className="text-sm text-gray-500 mb-2 italic">
-                        {record.context}
+                      <div className="text-sm text-gray-500 mb-2 italic prose prose-sm max-w-none">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ children }: any) => <p className="mb-1 last:mb-0">{children}</p>,
+                            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+                            em: ({ children }: any) => <em className="italic">{children}</em>,
+                          }}
+                        >
+                          {record.context}
+                        </ReactMarkdown>
                       </div>
                     )}
                     {record.exampleSentence && (
-                      <div className="text-sm text-gray-600 mb-2">
+                      <div className="text-sm text-gray-600 mb-2 prose prose-sm max-w-none">
                         <span className="font-medium">例句：</span>
-                        {record.exampleSentence}
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ children }: any) => <span className="inline">{children}</span>,
+                            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+                            em: ({ children }: any) => <em className="italic">{children}</em>,
+                          }}
+                        >
+                          {record.exampleSentence}
+                        </ReactMarkdown>
                       </div>
                     )}
                     {record.tags.length > 0 && (
@@ -881,7 +1069,46 @@ export function WordbookPanel({
                       <span>
                         {record.sourceLang} → {record.targetLang}
                       </span>
-                      <span>掌握程度: {record.masteryLevel}/5</span>
+                      <div className="flex items-center gap-1">
+                        <span>掌握程度:</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newLevel = Math.max(0, record.masteryLevel - 1);
+                            handleQuickUpdateMastery(record.id, newLevel);
+                          }}
+                          className="px-1 py-0.5 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={record.masteryLevel <= 0}
+                          title="减少熟练度"
+                        >
+                          −
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const levels = [0, 1, 2, 3, 4, 5];
+                            const currentIndex = levels.indexOf(record.masteryLevel);
+                            const nextIndex = (currentIndex + 1) % levels.length;
+                            handleQuickUpdateMastery(record.id, levels[nextIndex]);
+                          }}
+                          className="px-2 py-0.5 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors font-medium min-w-[2rem] text-center"
+                          title="点击切换熟练度 (0-5)"
+                        >
+                          {record.masteryLevel}/5
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const newLevel = Math.min(5, record.masteryLevel + 1);
+                            handleQuickUpdateMastery(record.id, newLevel);
+                          }}
+                          className="px-1 py-0.5 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={record.masteryLevel >= 5}
+                          title="增加熟练度"
+                        >
+                          +
+                        </button>
+                      </div>
                       <span>复习次数: {record.reviewCount}</span>
                       <span>{formatDateTime(record.createdAt)}</span>
                     </div>
