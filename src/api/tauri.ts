@@ -512,11 +512,11 @@ export const tauriApi = {
 
 
   // Settings APIs
-  async getSettings(): Promise<{ ollama: { model: string; base_url: string }; startup_enabled?: boolean; result_style?: "compact" | "soft" | "skeuomorphic"; close_on_blur?: boolean; auto_check_update?: boolean; clipboard_max_items?: number }> {
+  async getSettings(): Promise<{ ollama: { model: string; base_url: string }; startup_enabled?: boolean; result_style?: "compact" | "soft" | "skeuomorphic"; close_on_blur?: boolean; auto_check_update?: boolean; clipboard_max_items?: number; translation_tab_order?: string[] }> {
     return invoke("get_settings");
   },
 
-  async saveSettings(settings: { ollama: { model: string; base_url: string }; startup_enabled?: boolean; result_style?: "compact" | "soft" | "skeuomorphic"; close_on_blur?: boolean; clipboard_max_items?: number }): Promise<void> {
+  async saveSettings(settings: { ollama: { model: string; base_url: string }; startup_enabled?: boolean; result_style?: "compact" | "soft" | "skeuomorphic"; close_on_blur?: boolean; clipboard_max_items?: number; translation_tab_order?: string[] }): Promise<void> {
     return invoke("save_settings", { settings });
   },
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -130,6 +131,20 @@ export function TranslationWindow() {
   const [editTags, setEditTags] = useState("");
   const [editMasteryLevel, setEditMasteryLevel] = useState(0);
   
+  // AI解释相关状态
+  const [ollamaSettings, setOllamaSettings] = useState<{ model: string; base_url: string }>({
+    model: "llama2",
+    base_url: "http://localhost:11434",
+  });
+  const [showAiExplanation, setShowAiExplanation] = useState(false);
+  const [aiExplanationWord, setAiExplanationWord] = useState<WordRecord | null>(null);
+  const [aiExplanationText, setAiExplanationText] = useState("");
+  const [isAiExplanationLoading, setIsAiExplanationLoading] = useState(false);
+  
+  // Tab顺序配置
+  const [tabOrder, setTabOrder] = useState<TabType[]>(["translation", "wordbook"]);
+  const [showTabOrderSettings, setShowTabOrderSettings] = useState(false);
+  
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -241,6 +256,48 @@ export function TranslationWindow() {
       updateIframeUrl(currentProvider, sourceLang, targetLang);
     }
   }, [sourceLang, targetLang, currentProvider, inputText]);
+
+  // 加载设置（包括Ollama设置和Tab顺序）
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const settings = await tauriApi.getSettings();
+        setOllamaSettings(settings.ollama);
+        
+        // 加载tab顺序配置
+        if (settings.translation_tab_order && Array.isArray(settings.translation_tab_order)) {
+          // 验证tab顺序，确保只包含有效的tab类型
+          const validTabs = settings.translation_tab_order.filter(
+            (tab: string): tab is TabType => tab === "translation" || tab === "wordbook"
+          );
+          // 确保所有tab都存在
+          const allTabs: TabType[] = ["translation", "wordbook"];
+          const orderedTabs: TabType[] = [];
+          
+          // 先添加配置顺序中的tab
+          for (const tab of validTabs) {
+            if (!orderedTabs.includes(tab)) {
+              orderedTabs.push(tab);
+            }
+          }
+          
+          // 再添加未在配置中的tab（如果有）
+          for (const tab of allTabs) {
+            if (!orderedTabs.includes(tab)) {
+              orderedTabs.push(tab);
+            }
+          }
+          
+          if (orderedTabs.length > 0) {
+            setTabOrder(orderedTabs);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load settings:", error);
+      }
+    };
+    loadSettings();
+  }, []);
 
   const handleSwapLanguages = () => {
     const tempLang = sourceLang;
@@ -419,6 +476,203 @@ export function TranslationWindow() {
     }
   }, [loadWordRecords]);
 
+  // AI解释功能（流式请求）
+  const handleAiExplanation = useCallback(async (record: WordRecord) => {
+    setAiExplanationWord(record);
+    setShowAiExplanation(true);
+    setAiExplanationText("");
+    setIsAiExplanationLoading(true);
+
+    let accumulatedAnswer = '';
+    let buffer = ''; // 用于处理不完整的行
+
+    try {
+      const baseUrl = ollamaSettings.base_url || 'http://localhost:11434';
+      const model = ollamaSettings.model || 'llama2';
+      
+      const prompt = `请详细解释英语单词 "${record.word}"（中文翻译：${record.translation}）。请提供：
+1. 单词的详细含义和用法
+2. 词性（如果是动词，说明及物/不及物）
+3. 常见搭配和短语
+4. 2-3个实用的例句（中英文对照）
+5. 记忆技巧或词根词缀分析（如果有）
+请用中文回答，内容要详细且实用。`;
+
+      // 尝试使用 chat API (流式)
+      const response = await fetch(`${baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        // 如果chat API失败，尝试使用generate API作为后备
+        const generateResponse = await fetch(`${baseUrl}/api/generate`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: model,
+            prompt: prompt,
+            stream: true,
+          }),
+        });
+
+        if (!generateResponse.ok) {
+          throw new Error(`Ollama API错误: ${generateResponse.statusText}`);
+        }
+
+        // 处理 generate API 的流式响应
+        const reader = generateResponse.body?.getReader();
+        const decoder = new TextDecoder();
+        
+        if (!reader) {
+          throw new Error('无法读取响应流');
+        }
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // 处理剩余的 buffer
+            if (buffer.trim()) {
+              try {
+                const data = JSON.parse(buffer);
+                if (data.response) {
+                  accumulatedAnswer += data.response;
+                  flushSync(() => {
+                    setAiExplanationText(accumulatedAnswer);
+                  });
+                }
+              } catch (e) {
+                console.warn('解析最后的数据失败:', e, buffer);
+              }
+            }
+            break;
+          }
+
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+          const lines = buffer.split('\n');
+          
+          // 保留最后一个不完整的行
+          buffer = lines.pop() || '';
+
+          // 快速处理所有完整的行
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            
+            try {
+              const data = JSON.parse(trimmedLine);
+              if (data.response) {
+                accumulatedAnswer += data.response;
+                flushSync(() => {
+                  setAiExplanationText(accumulatedAnswer);
+                });
+              }
+              if (data.done) {
+                setIsAiExplanationLoading(false);
+                flushSync(() => {
+                  setAiExplanationText(accumulatedAnswer);
+                });
+                return;
+              }
+            } catch (e) {
+              // 忽略解析错误，继续处理下一行
+              console.warn('解析流式数据失败:', e, trimmedLine);
+            }
+          }
+        }
+        
+        setIsAiExplanationLoading(false);
+        setAiExplanationText(accumulatedAnswer);
+        return;
+      }
+
+      // 处理 chat API 的流式响应
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      
+      if (!reader) {
+        throw new Error('无法读取响应流');
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          // 处理剩余的 buffer
+          if (buffer.trim()) {
+            try {
+              const data = JSON.parse(buffer);
+              if (data.message?.content) {
+                accumulatedAnswer += data.message.content;
+                flushSync(() => {
+                  setAiExplanationText(accumulatedAnswer);
+                });
+              }
+            } catch (e) {
+              console.warn('解析最后的数据失败:', e, buffer);
+            }
+          }
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        
+        // 保留最后一个不完整的行
+        buffer = lines.pop() || '';
+
+        // 快速处理所有完整的行
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) continue;
+          
+          try {
+            const data = JSON.parse(trimmedLine);
+            if (data.message?.content) {
+              accumulatedAnswer += data.message.content;
+              // 立即更新 UI，不等待
+              flushSync(() => {
+                setAiExplanationText(accumulatedAnswer);
+              });
+            }
+            if (data.done) {
+              setIsAiExplanationLoading(false);
+              flushSync(() => {
+                setAiExplanationText(accumulatedAnswer);
+              });
+              return;
+            }
+          } catch (e) {
+            // 忽略解析错误，继续处理下一行
+            console.warn('解析流式数据失败:', e, trimmedLine);
+          }
+        }
+      }
+      
+      setIsAiExplanationLoading(false);
+      setAiExplanationText(accumulatedAnswer);
+    } catch (error: any) {
+      console.error('AI解释失败:', error);
+      setIsAiExplanationLoading(false);
+      setAiExplanationText(`获取AI解释失败: ${error.message || '未知错误'}\n\n请确保：\n1. Ollama服务正在运行\n2. 已安装并配置了正确的模型\n3. 设置中的Ollama配置正确`);
+    }
+  }, [ollamaSettings]);
+
   const formatDate = useCallback((timestamp: number | undefined | null) => {
     if (!timestamp || timestamp <= 0) {
       return "未知时间";
@@ -460,6 +714,25 @@ export function TranslationWindow() {
       callback: handleCancelEdit,
     },
     {
+      condition: () => showTabOrderSettings,
+      callback: () => setShowTabOrderSettings(false),
+    },
+    {
+      condition: () => showSaveDialog,
+      callback: () => {
+        setShowSaveDialog(false);
+        setSaveTranslation("");
+      },
+    },
+    {
+      condition: () => showAiExplanation,
+      callback: () => {
+        setShowAiExplanation(false);
+        setAiExplanationWord(null);
+        setAiExplanationText("");
+      },
+    },
+    {
       condition: () => true, // 默认情况：关闭窗口
       callback: handleCloseWindow,
     },
@@ -472,6 +745,13 @@ export function TranslationWindow() {
       <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200 shadow-sm">
         <h1 className="text-lg font-semibold text-gray-800">翻译工具</h1>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowTabOrderSettings(true)}
+            className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors"
+            title="设置标签页顺序"
+          >
+            ⚙️ 设置
+          </button>
           {activeTab === "translation" && inputText.trim() && (
             <button
               onClick={handleSaveWord}
@@ -495,26 +775,26 @@ export function TranslationWindow() {
 
       {/* 标签页切换 */}
       <div className="flex items-center gap-1 px-4 py-2 bg-white border-b border-gray-200">
-        <button
-          onClick={() => setActiveTab("translation")}
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeTab === "translation"
-              ? "bg-blue-500 text-white"
-              : "text-gray-600 hover:text-gray-800 hover:bg-gray-100"
-          }`}
-        >
-          翻译工具
-        </button>
-        <button
-          onClick={() => setActiveTab("wordbook")}
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            activeTab === "wordbook"
-              ? "bg-blue-500 text-white"
-              : "text-gray-600 hover:text-gray-800 hover:bg-gray-100"
-          }`}
-        >
-          📚 单词本
-        </button>
+        {tabOrder.map((tab) => {
+          const tabConfig = {
+            translation: { label: "翻译工具", icon: null },
+            wordbook: { label: "📚 单词本", icon: null },
+          }[tab];
+          
+          return (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                activeTab === tab
+                  ? "bg-blue-500 text-white"
+                  : "text-gray-600 hover:text-gray-800 hover:bg-gray-100"
+              }`}
+            >
+              {tabConfig.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* 翻译工具内容 */}
@@ -840,6 +1120,13 @@ export function TranslationWindow() {
                       </div>
                       <div className="flex items-center gap-2">
                         <button
+                          onClick={() => handleAiExplanation(record)}
+                          className="px-3 py-1 text-sm text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded transition-colors"
+                          title="AI解释"
+                        >
+                          AI解释
+                        </button>
+                        <button
                           onClick={() => handleEditWord(record)}
                           className="px-3 py-1 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
                           title="编辑"
@@ -1040,6 +1327,180 @@ export function TranslationWindow() {
               </button>
               <button
                 onClick={handleConfirmSave}
+                className="px-4 py-2 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded transition-colors"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI解释对话框 */}
+      {showAiExplanation && aiExplanationWord && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-[700px] max-w-[90vw] max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">
+                AI解释: <span className="text-blue-600">{aiExplanationWord.word}</span>
+              </h2>
+              <button
+                onClick={() => {
+                  setShowAiExplanation(false);
+                  setAiExplanationWord(null);
+                  setAiExplanationText("");
+                }}
+                className="text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto mb-4">
+              {isAiExplanationLoading ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
+                  <div>AI正在生成解释...</div>
+                </div>
+              ) : (
+                <div className="prose max-w-none">
+                  <div className="text-gray-700 whitespace-pre-wrap leading-relaxed">
+                    {aiExplanationText || "暂无解释内容"}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowAiExplanation(false);
+                  setAiExplanationWord(null);
+                  setAiExplanationText("");
+                }}
+                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded transition-colors"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 标签页顺序设置对话框 */}
+      {showTabOrderSettings && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setShowTabOrderSettings(false)}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-xl p-6 w-[500px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">标签页顺序设置</h2>
+              <button
+                onClick={() => setShowTabOrderSettings(false)}
+                className="text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div className="space-y-3 mb-6">
+              <p className="text-sm text-gray-500 mb-4">
+                调整翻译工具窗口中标签页的显示顺序
+              </p>
+              <div className="space-y-2">
+                {tabOrder.map((tab, index) => {
+                  const tabLabels: Record<string, string> = {
+                    translation: "翻译工具",
+                    wordbook: "📚 单词本",
+                  };
+                  
+                  return (
+                    <div key={`${tab}-${index}`} className="flex items-center gap-2 p-3 bg-gray-50 rounded-md border border-gray-200">
+                      <div className="flex-1 flex items-center gap-2">
+                        <span className="text-xs text-gray-500 w-6 font-medium">{index + 1}.</span>
+                        <span className="text-sm text-gray-700 font-medium">{tabLabels[tab] || tab}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        {index > 0 && (
+                          <button
+                            onClick={() => {
+                              const newOrder = [...tabOrder];
+                              [newOrder[index], newOrder[index - 1]] = [newOrder[index - 1], newOrder[index]];
+                              setTabOrder(newOrder);
+                            }}
+                            className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded transition-colors"
+                            title="上移"
+                          >
+                            ↑
+                          </button>
+                        )}
+                        {index < tabOrder.length - 1 && (
+                          <button
+                            onClick={() => {
+                              const newOrder = [...tabOrder];
+                              [newOrder[index], newOrder[index + 1]] = [newOrder[index + 1], newOrder[index]];
+                              setTabOrder(newOrder);
+                            }}
+                            className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-200 rounded transition-colors"
+                            title="下移"
+                          >
+                            ↓
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowTabOrderSettings(false);
+                }}
+                className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const settings = await tauriApi.getSettings();
+                    await tauriApi.saveSettings({
+                      ...settings,
+                      translation_tab_order: tabOrder,
+                    });
+                    setShowTabOrderSettings(false);
+                  } catch (error) {
+                    console.error("Failed to save tab order:", error);
+                    alert("保存失败：" + (error instanceof Error ? error.message : String(error)));
+                  }
+                }}
                 className="px-4 py-2 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded transition-colors"
               >
                 保存

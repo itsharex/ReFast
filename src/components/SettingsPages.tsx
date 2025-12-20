@@ -145,6 +145,7 @@ interface SystemSettingsProps {
     close_on_blur?: boolean;
     auto_check_update?: boolean;
     clipboard_max_items?: number;
+    translation_tab_order?: string[];
   };
   onSettingsChange: (settings: any) => void;
   onOpenHotkeySettings: () => void;
@@ -337,7 +338,6 @@ export function SystemSettingsPage({
               </label>
             </div>
           </div>
-
 
         </div>
       </div>

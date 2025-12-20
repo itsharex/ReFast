@@ -30,6 +30,8 @@ pub struct Settings {
     pub ignored_update_version: Option<String>,
     #[serde(default = "default_clipboard_max_items")]
     pub clipboard_max_items: u32,
+    #[serde(default = "default_translation_tab_order")]
+    pub translation_tab_order: Vec<String>,
 }
 
 fn default_clipboard_max_items() -> u32 {
@@ -48,6 +50,10 @@ fn default_auto_check_update() -> bool {
     true
 }
 
+fn default_translation_tab_order() -> Vec<String> {
+    vec!["translation".to_string(), "wordbook".to_string()]
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -63,6 +69,7 @@ impl Default for Settings {
             last_update_check_time: None,
             ignored_update_version: None,
             clipboard_max_items: default_clipboard_max_items(),
+            translation_tab_order: default_translation_tab_order(),
         }
     }
 }
