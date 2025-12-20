@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { flushSync } from "react-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { tauriApi } from "../api/tauri";
 import type { WordRecord } from "../types";
@@ -8,9 +10,18 @@ import { formatDateTime } from "../utils/dateUtils";
 interface WordbookPanelProps {
   ollamaSettings: { model: string; base_url: string };
   onRefresh?: () => void;
+  showAiExplanation?: boolean;
+  onShowAiExplanationChange?: (show: boolean) => void;
+  onCloseAiExplanation?: () => void;
 }
 
-export function WordbookPanel({ ollamaSettings, onRefresh }: WordbookPanelProps) {
+export function WordbookPanel({ 
+  ollamaSettings, 
+  onRefresh,
+  showAiExplanation: externalShowAiExplanation,
+  onShowAiExplanationChange,
+  onCloseAiExplanation,
+}: WordbookPanelProps) {
   // 单词本相关状态
   const [wordRecords, setWordRecords] = useState<WordRecord[]>([]);
   const [wordSearchQuery, setWordSearchQuery] = useState("");
@@ -26,8 +37,17 @@ export function WordbookPanel({ ollamaSettings, onRefresh }: WordbookPanelProps)
   const [editTags, setEditTags] = useState("");
   const [editMasteryLevel, setEditMasteryLevel] = useState(0);
   
-  // AI解释相关状态
-  const [showAiExplanation, setShowAiExplanation] = useState(false);
+  // AI解释相关状态（如果父组件提供了状态，使用父组件的；否则使用本地状态）
+  const [internalShowAiExplanation, setInternalShowAiExplanation] = useState(false);
+  const showAiExplanation = externalShowAiExplanation !== undefined ? externalShowAiExplanation : internalShowAiExplanation;
+  const setShowAiExplanation = useCallback((show: boolean) => {
+    if (onShowAiExplanationChange) {
+      onShowAiExplanationChange(show);
+    } else {
+      setInternalShowAiExplanation(show);
+    }
+  }, [onShowAiExplanationChange]);
+  
   const [aiExplanationWord, setAiExplanationWord] = useState<WordRecord | null>(null);
   const [aiExplanationText, setAiExplanationText] = useState("");
   const [isAiExplanationLoading, setIsAiExplanationLoading] = useState(false);
@@ -155,6 +175,27 @@ export function WordbookPanel({ ollamaSettings, onRefresh }: WordbookPanelProps)
       }
     }
   }, [loadWordRecords]);
+
+  // 关闭AI解释弹窗的统一处理
+  const handleCloseAiExplanation = useCallback(() => {
+    setShowAiExplanation(false);
+    setAiExplanationWord(null);
+    setAiExplanationText("");
+    if (onCloseAiExplanation) {
+      onCloseAiExplanation();
+    }
+  }, [onCloseAiExplanation, setShowAiExplanation]);
+
+  // 将关闭函数暴露给父组件（用于ESC键处理）
+  useEffect(() => {
+    if (onCloseAiExplanation && showAiExplanation) {
+      // 通过ref暴露关闭函数给父组件
+      (onCloseAiExplanation as any).current = handleCloseAiExplanation;
+      return () => {
+        (onCloseAiExplanation as any).current = null;
+      };
+    }
+  }, [showAiExplanation, handleCloseAiExplanation, onCloseAiExplanation]);
 
   // AI解释功能（流式请求）
   const handleAiExplanation = useCallback(async (record: WordRecord) => {
@@ -378,6 +419,7 @@ export function WordbookPanel({ ollamaSettings, onRefresh }: WordbookPanelProps)
       (onRefresh as any).current = loadWordRecords;
     }
   }, [loadWordRecords, onRefresh]);
+
 
   return (
     <>
@@ -640,11 +682,7 @@ export function WordbookPanel({ ollamaSettings, onRefresh }: WordbookPanelProps)
                 AI解释: <span className="text-blue-600">{aiExplanationWord.word}</span>
               </h2>
               <button
-                onClick={() => {
-                  setShowAiExplanation(false);
-                  setAiExplanationWord(null);
-                  setAiExplanationText("");
-                }}
+                onClick={handleCloseAiExplanation}
                 className="text-gray-500 hover:text-gray-700 transition-colors"
               >
                 <svg
@@ -676,19 +714,57 @@ export function WordbookPanel({ ollamaSettings, onRefresh }: WordbookPanelProps)
                       <span>AI正在生成解释...</span>
                     </div>
                   )}
-                  <div className="text-gray-700 whitespace-pre-wrap leading-relaxed">
-                    {aiExplanationText || "暂无解释内容"}
+                  <div className="text-gray-700 leading-relaxed">
+                    {aiExplanationText ? (
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          // 自定义样式
+                          p: ({ children }: any) => <p className="mb-3 last:mb-0">{children}</p>,
+                          h1: ({ children }: any) => <h1 className="text-2xl font-bold mb-3 mt-4 first:mt-0">{children}</h1>,
+                          h2: ({ children }: any) => <h2 className="text-xl font-bold mb-2 mt-4 first:mt-0">{children}</h2>,
+                          h3: ({ children }: any) => <h3 className="text-lg font-semibold mb-2 mt-3 first:mt-0">{children}</h3>,
+                          h4: ({ children }: any) => <h4 className="text-base font-semibold mb-2 mt-3 first:mt-0">{children}</h4>,
+                          ul: ({ children }: any) => <ul className="list-disc list-inside mb-3 space-y-1">{children}</ul>,
+                          ol: ({ children }: any) => <ol className="list-decimal list-inside mb-3 space-y-1">{children}</ol>,
+                          li: ({ children }: any) => <li className="ml-2">{children}</li>,
+                          code: ({ inline, children }: any) => 
+                            inline ? (
+                              <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>
+                            ) : (
+                              <code className="block bg-gray-100 p-3 rounded text-sm font-mono overflow-x-auto mb-3">{children}</code>
+                            ),
+                          pre: ({ children }: any) => <pre className="mb-3">{children}</pre>,
+                          blockquote: ({ children }: any) => (
+                            <blockquote className="border-l-4 border-gray-300 pl-4 italic my-3">{children}</blockquote>
+                          ),
+                          table: ({ children }: any) => (
+                            <div className="overflow-x-auto mb-3">
+                              <table className="min-w-full border border-gray-300">{children}</table>
+                            </div>
+                          ),
+                          thead: ({ children }: any) => <thead className="bg-gray-50">{children}</thead>,
+                          tbody: ({ children }: any) => <tbody>{children}</tbody>,
+                          tr: ({ children }: any) => <tr className="border-b border-gray-200">{children}</tr>,
+                          th: ({ children }: any) => <th className="px-4 py-2 text-left font-semibold">{children}</th>,
+                          td: ({ children }: any) => <td className="px-4 py-2">{children}</td>,
+                          hr: () => <hr className="my-4 border-gray-300" />,
+                          strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+                          em: ({ children }: any) => <em className="italic">{children}</em>,
+                        }}
+                      >
+                        {aiExplanationText}
+                      </ReactMarkdown>
+                    ) : (
+                      <div className="text-gray-400 italic">暂无解释内容</div>
+                    )}
                   </div>
                 </div>
               )}
             </div>
             <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
               <button
-                onClick={() => {
-                  setShowAiExplanation(false);
-                  setAiExplanationWord(null);
-                  setAiExplanationText("");
-                }}
+                onClick={handleCloseAiExplanation}
                 className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded transition-colors"
               >
                 关闭

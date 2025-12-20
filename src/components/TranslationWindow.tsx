@@ -23,6 +23,10 @@ export function TranslationWindow() {
   const [tabOrder, setTabOrder] = useState<TabType[]>(["translation", "wordbook"]);
   const [showTabOrderSettings, setShowTabOrderSettings] = useState(false);
   
+  // AI解释弹窗状态（提升到父组件，用于ESC键优先级处理）
+  const [showAiExplanation, setShowAiExplanation] = useState(false);
+  const aiExplanationCloseRef = useRef<{ current: (() => void) | null }>({ current: null });
+  
   // 用于刷新单词本
   const wordbookRefreshRef = useRef<{ current: (() => void) | null }>({ current: null });
 
@@ -91,6 +95,16 @@ export function TranslationWindow() {
 
   useEscapeKeyWithPriority([
     {
+      condition: () => showAiExplanation,
+      callback: () => {
+        if (aiExplanationCloseRef.current.current) {
+          aiExplanationCloseRef.current.current();
+        } else {
+          setShowAiExplanation(false);
+        }
+      },
+    },
+    {
       condition: () => showTabOrderSettings,
       callback: () => setShowTabOrderSettings(false),
     },
@@ -157,6 +171,9 @@ export function TranslationWindow() {
         <WordbookPanel
           ollamaSettings={ollamaSettings}
           onRefresh={wordbookRefreshRef.current as any}
+          showAiExplanation={showAiExplanation}
+          onShowAiExplanationChange={setShowAiExplanation}
+          onCloseAiExplanation={aiExplanationCloseRef.current as any}
         />
       )}
 
