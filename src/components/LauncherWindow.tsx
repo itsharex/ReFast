@@ -6133,54 +6133,6 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
                       </div>
                     )}
                     {/* 其他结果垂直排列 */}
-                    {(() => {
-                      // 调试：输出最终渲染的纵向列表数组（完整数组）
-                      const normalizePathForHistory = (path: string) => path.toLowerCase().replace(/\\/g, "/");
-                      const fullArray = verticalResults.map((result, idx) => {
-                        const pathNormalized = normalizePathForHistory(result.path);
-                        const lastUsedFromHistory = Object.entries(openHistory).find(([key]) => 
-                          normalizePathForHistory(key) === pathNormalized
-                        )?.[1];
-                        const useCount = result.file?.use_count;
-                        // openHistory 存储的是秒级时间戳，需要转换为毫秒；file.last_used 也是秒级时间戳
-                        const lastUsed = (lastUsedFromHistory || result.file?.last_used || 0) * 1000;
-                        const score = calculateRelevanceScore(
-                          result.displayName,
-                          result.path,
-                          query,
-                          useCount,
-                          lastUsed,
-                          result.type === "everything",
-                          result.type === "app",
-                          result.app?.name_pinyin,
-                          result.app?.name_pinyin_initials,
-                          result.type === "file",
-                          result.type === "url"
-                        );
-                        return {
-                          index: idx,
-                          type: result.type,
-                          displayName: result.displayName,
-                          path: result.path,
-                          lastUsed: lastUsed ? new Date(lastUsed).toLocaleString() : "无",
-                          lastUsedTimestamp: lastUsed,
-                          useCount: useCount || 0,
-                          score: score,
-                          url: result.url || undefined,
-                          file: result.file ? {
-                            use_count: result.file.use_count,
-                            last_used: result.file.last_used ? new Date(result.file.last_used * 1000).toLocaleString() : "无",
-                            last_used_timestamp: result.file.last_used
-                          } : undefined
-                        };
-                      });
-                      console.log("=== 纵向列表最终渲染数组（完整） ===", {
-                        数组长度: fullArray.length,
-                        查询内容: query,
-                        完整数组: fullArray
-                      });
-                      return null;
-                    })()}
                     {verticalResults.map((result, index) => {
                       const isSelected = selectedVerticalIndex === index;
                       // 计算垂直结果的序号（从1开始，只计算垂直结果）
