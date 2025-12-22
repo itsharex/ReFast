@@ -30,6 +30,14 @@ import type { SearchResult } from "../utils/resultUtils";
 import { askOllama } from "../utils/ollamaUtils";
 import { computeCombinedResults } from "../utils/combineResultsUtils";
 import { handleLaunch as handleLaunchUtil } from "../utils/launchUtils";
+import {
+  startEverythingSearchSession,
+  closeEverythingSession,
+  checkEverythingStatus,
+  startEverythingService,
+  downloadEverythingInstaller,
+} from "../utils/everythingUtils";
+import { useLauncherInitialization } from "../hooks/useLauncherInitialization";
 
 
 interface LauncherWindowProps {
@@ -491,339 +499,6 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
   }, [resetMemoState]);
 
   // 插件列表已从 plugins/index.ts 导入
-
-  // Load settings on mount and reload when settings window closes
-  useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const settings = await tauriApi.getSettings();
-        setOllamaSettings(settings.ollama);
-        const styleFromSettings = (settings.result_style as ResultStyle) || null;
-        const styleFromCache = localStorage.getItem("result-style");
-        const fallback =
-          styleFromSettings && ["compact", "soft", "skeuomorphic"].includes(styleFromSettings)
-            ? styleFromSettings
-            : styleFromCache && ["compact", "soft", "skeuomorphic"].includes(styleFromCache)
-            ? (styleFromCache as ResultStyle)
-            : "skeuomorphic";
-        setResultStyle(fallback);
-        localStorage.setItem("result-style", fallback);
-        const closeOnBlurSetting = settings.close_on_blur ?? true;
-        setCloseOnBlur(closeOnBlurSetting);
-        closeOnBlurRef.current = closeOnBlurSetting;
-        // 加载搜索引擎配置
-        if (settings.search_engines) {
-          setSearchEngines(settings.search_engines);
-        }
-      } catch (error) {
-        console.error("Failed to load settings:", error);
-      }
-    };
-    loadSettings();
-
-    // 监听设置窗口关闭事件，重新加载设置
-    const unlisten = listen("settings:updated", () => {
-      loadSettings();
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-
-  // 监听 JSON 查看器窗口准备好事件，发送待处理的内容
-  useEffect(() => {
-    let unlistenFn: (() => void) | null = null;
-
-    const setupListener = async () => {
-      try {
-        unlistenFn = await listen("json-formatter:ready", async () => {
-          // 窗口已准备好，发送待处理的内容
-          if (pendingJsonContentRef.current) {
-            const content = pendingJsonContentRef.current;
-            pendingJsonContentRef.current = null; // 清空待处理内容
-            
-            try {
-              const { emit } = await import("@tauri-apps/api/event");
-              await emit("json-formatter:set-content", content);
-            } catch (error) {
-              console.error("Failed to send JSON content to formatter window:", error);
-            }
-          }
-        });
-      } catch (error) {
-        console.error("Failed to setup JSON formatter ready listener:", error);
-      }
-    };
-
-    setupListener();
-
-    return () => {
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
-  }, []);
-
-  // Check if Everything is available on mount and periodically if not available
-  useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-    
-    const checkEverything = async () => {
-      try {
-        const status = await tauriApi.getEverythingStatus();
-        setIsEverythingAvailable(status.available);
-        setEverythingError(status.error || null);
-        
-        // Get Everything path and version for debugging
-        if (status.available) {
-          try {
-            const path = await tauriApi.getEverythingPath();
-            setEverythingPath(path);
-            if (path) {
-              // Path found
-            }
-            
-            // Get Everything version
-            try {
-              const version = await tauriApi.getEverythingVersion();
-              setEverythingVersion(version);
-              if (version) {
-                // Version retrieved
-              }
-            } catch (error) {
-              console.error("Failed to get Everything version:", error);
-            }
-          } catch (error) {
-            console.error("Failed to get Everything path:", error);
-          }
-          
-          // 如果检测到已安装，清除定时器
-          if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-            console.log("[Everything检测] 检测到 Everything 已安装，停止定时检测");
-          }
-          
-          return true;
-        } else {
-          console.warn("Everything is not available:", status.error);
-          setEverythingPath(null);
-          setEverythingVersion(null);
-          return false;
-        }
-      } catch (error) {
-        console.error("Failed to check Everything availability:", error);
-        setIsEverythingAvailable(false);
-        setEverythingPath(null);
-        setEverythingVersion(null);
-        setEverythingError("检查失败");
-        return false;
-      }
-    };
-    
-    // 立即检查一次
-    checkEverything().then((isAvailable) => {
-      // 如果 Everything 不可用，设置定时检测（每 5 秒检查一次）
-      if (!isAvailable) {
-        console.log("[Everything检测] Everything 未安装，开始定时检测（每 5 秒）");
-        intervalId = setInterval(async () => {
-          await checkEverything();
-        }, 5000); // 每 5 秒检查一次
-      }
-    });
-    
-    // 组件卸载时清除定时器
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-        console.log("[Everything检测] 组件卸载，清除定时检测");
-      }
-    };
-  }, []);
-
-  // Load all memos on mount (for quick search)
-  useEffect(() => {
-    const loadMemos = async () => {
-      try {
-        const list = await tauriApi.getAllMemos();
-        setMemos(list);
-      } catch (error) {
-        console.error("Failed to load memos:", error);
-      }
-    };
-    loadMemos();
-  }, []);
-
-  // Load open history on mount
-  useEffect(() => {
-    const loadOpenHistory = async () => {
-      try {
-        const history = await tauriApi.getOpenHistory();
-        setOpenHistory(history);
-        // 加载所有 URL 的备注信息（备注存储在 name 字段中）
-        const remarks: Record<string, string> = {};
-        for (const [key] of Object.entries(history)) {
-          if (key.startsWith('http://') || key.startsWith('https://')) {
-            try {
-              const item = await tauriApi.getOpenHistoryItem(key);
-              if (item?.name) {
-                remarks[key] = item.name;
-              }
-            } catch (error) {
-              // 忽略单个项加载失败
-            }
-          }
-        }
-        setUrlRemarks(remarks);
-      } catch (error) {
-        console.error("Failed to load open history:", error);
-      }
-    };
-    loadOpenHistory();
-  }, []);
-
-  // 静默预加载应用列表（组件挂载时，不显示加载状态）
-  useEffect(() => {
-    let isMounted = true;
-    const preloadApplications = async () => {
-      try {
-        // 静默加载，不设置 isLoading 状态
-        const allApps = await tauriApi.scanApplications();
-        if (isMounted) {
-          const filteredApps = filterWindowsApps(allApps);
-          setApps(filteredApps);
-          // 同时更新缓存，用于前端搜索
-          allAppsCacheRef.current = filteredApps;
-          allAppsCacheLoadedRef.current = true;
-          // 不设置 filteredApps，等待用户输入查询时再设置
-        }
-      } catch (error) {
-        console.error("Failed to preload applications:", error);
-        // 预加载失败不影响用户体验，静默处理
-      }
-    };
-    // 延迟一小段时间，避免阻塞初始渲染
-    const timer = setTimeout(preloadApplications, 100);
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-    };
-  }, []);
-
-  // 静默预加载文件历史（组件挂载时，不显示加载状态）
-  useEffect(() => {
-    let isMounted = true;
-    const preloadFileHistory = async () => {
-      try {
-        // 静默加载所有文件历史到前端缓存
-        const allFileHistory = await tauriApi.getAllFileHistory();
-        if (isMounted) {
-          allFileHistoryCacheRef.current = allFileHistory;
-          allFileHistoryCacheLoadedRef.current = true;
-        }
-      } catch (error) {
-        console.error("Failed to preload file history:", error);
-        // 预加载失败不影响用户体验，静默处理
-      }
-    };
-    // 延迟一小段时间，避免阻塞初始渲染
-    const timer = setTimeout(preloadFileHistory, 200);
-    return () => {
-      isMounted = false;
-      clearTimeout(timer);
-    };
-  }, []);
-
-  // 监听插件快捷键（通过后端全局监听）
-  const lastTriggeredRef = useRef<{ pluginId: string; time: number } | null>(null);
-  
-  useEffect(() => {
-    // 监听后端发送的插件快捷键触发事件
-    let unsubscribeTriggered: (() => void) | null = null;
-    let unsubscribeUpdated: (() => void) | null = null;
-    
-    const setupListeners = async () => {
-      // 监听插件快捷键触发事件（从后端发送）
-      unsubscribeTriggered = await listen<string>("plugin-hotkey-triggered", async (event) => {
-        const pluginId = event.payload;
-        
-        // 前端防抖：检查是否在 500ms 内重复触发同一个插件
-        // 增加防抖时间，防止重复打开窗口
-        const now = Date.now();
-        if (lastTriggeredRef.current) {
-          const { pluginId: lastId, time: lastTime } = lastTriggeredRef.current;
-          if (lastId === pluginId && now - lastTime < 500) {
-            console.log(`[PluginHotkeys] ⏭️  Ignored duplicate trigger for plugin: ${pluginId} (within 500ms)`);
-            return;
-          }
-        }
-        
-        // 记录触发时间和插件 ID
-        lastTriggeredRef.current = { pluginId, time: now };
-        
-        console.log(`[PluginHotkeys] ✅ Hotkey triggered for plugin: ${pluginId}`);
-        
-        try {
-          const pluginContext: PluginContext = {
-            query,
-            setQuery,
-            setSelectedIndex,
-            hideLauncher: async () => {
-              await tauriApi.hideLauncher();
-            },
-            tauriApi,
-          };
-          await executePlugin(pluginId, pluginContext);
-        } catch (error) {
-          console.error(`[PluginHotkeys] ❌ Failed to execute plugin ${pluginId}:`, error);
-        }
-      });
-      
-      // 监听插件快捷键更新事件
-      unsubscribeUpdated = await listen<Record<string, { modifiers: string[]; key: string }>>(
-        "plugin-hotkeys-updated",
-        () => {
-          // 插件快捷键更新事件处理（当前为空）
-        }
-      );
-    };
-    
-    setupListeners().catch((error) => {
-      console.error("[PluginHotkeys] Failed to setup listeners:", error);
-    });
-
-    return () => {
-      if (unsubscribeTriggered) {
-        unsubscribeTriggered();
-      }
-      if (unsubscribeUpdated) {
-        unsubscribeUpdated();
-      }
-    };
-  }, []);
-
-  // Listen for Everything download progress events
-  useEffect(() => {
-    if (!isDownloadingEverything) return;
-
-    let unlistenFn: (() => void) | null = null;
-    
-    const setupProgressListener = async () => {
-      const unlisten = await listen<number>("everything-download-progress", (event) => {
-        setEverythingDownloadProgress(event.payload);
-      });
-      unlistenFn = unlisten;
-    };
-
-    setupProgressListener();
-
-    return () => {
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    };
-  }, [isDownloadingEverything]);
 
   // Adjust window size when memo modal is shown
   useEffect(() => {
@@ -2128,8 +1803,33 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
   const allAppsCacheRef = useRef<AppInfo[]>([]);
   const allAppsCacheLoadedRef = useRef<boolean>(false);
 
-
-
+  // 使用自定义 hook 处理所有初始化逻辑
+  useLauncherInitialization({
+    setOllamaSettings,
+    setResultStyle,
+    setCloseOnBlur,
+    setSearchEngines,
+    setIsEverythingAvailable,
+    setEverythingError,
+    setEverythingPath,
+    setEverythingVersion,
+    setMemos,
+    setOpenHistory,
+    setUrlRemarks,
+    setApps,
+    setEverythingDownloadProgress,
+    pendingJsonContentRef,
+    allAppsCacheRef,
+    allAppsCacheLoadedRef,
+    allFileHistoryCacheRef,
+    allFileHistoryCacheLoadedRef,
+    closeOnBlurRef,
+    filterWindowsApps,
+    query,
+    setQuery,
+    setSelectedIndex,
+    isDownloadingEverything,
+  });
 
   // 系统文件夹列表（缓存，避免每次搜索都调用后端）
   const systemFoldersListRef = useRef<Array<{ name: string; path: string; display_name: string; is_folder: boolean; icon?: string; name_pinyin?: string; name_pinyin_initials?: string }>>([]);
@@ -2258,243 +1958,48 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
   // 关闭会话的安全方法（完全复刻 EverythingSearchWindow）
   const closeSessionSafe = useCallback(
     async (id?: string | null) => {
-      const target = id ?? pendingSessionIdRef.current;
-      if (!target) return;
-      try {
-        await tauriApi.closeEverythingSearchSession(target);
-      } catch (error) {
-        // 静默处理错误
-      }
+      await closeEverythingSession({
+        sessionId: id,
+        pendingSessionIdRef,
+        tauriApi,
+      });
     },
-    []
+    [tauriApi]
   );
 
   // 启动 Everything 搜索会话（完全复刻 EverythingSearchWindow 的模式）
   const startSearchSession = useCallback(
     async (searchQuery: string) => {
-      if (!searchQuery || searchQuery.trim() === "") {
-        const oldSessionId = pendingSessionIdRef.current;
-        if (oldSessionId) {
-          await closeSessionSafe(oldSessionId);
-        }
-        pendingSessionIdRef.current = null;
-        currentSearchQueryRef.current = "";
-        displayedSearchQueryRef.current = "";
-        startTransition(() => {
-          setEverythingResults([]);
-          setEverythingTotalCount(null);
-          setEverythingCurrentCount(0);
-          setIsSearchingEverything(false);
-        });
-        return;
-      }
-
-      if (!isEverythingAvailable) {
-        const oldSessionId = pendingSessionIdRef.current;
-        if (oldSessionId) {
-          await closeSessionSafe(oldSessionId);
-        }
-        pendingSessionIdRef.current = null;
-        currentSearchQueryRef.current = "";
-        displayedSearchQueryRef.current = "";
-        startTransition(() => {
-          setEverythingResults([]);
-          setEverythingTotalCount(null);
-          setEverythingCurrentCount(0);
-          setIsSearchingEverything(false);
-        });
-        return;
-      }
-
-      const trimmed = searchQuery.trim();
-      // 性能优化：根据查询长度动态调整 maxResults
-      // 短查询（1-2字符）通常返回大量结果，使用较小的 maxResults 以加快会话创建
-      // 长查询（3+字符）结果更精确，可以使用较大的 maxResults
-      const queryLength = trimmed.length;
-      let maxResultsToUse = LAUNCHER_MAX_RESULTS; // 默认 50
-      if (queryLength === 1) {
-        // 单字符查询：使用最小的 maxResults，因为通常返回数百万结果
-        maxResultsToUse = 50; // 进一步降低到 50，最大化性能
-      } else if (queryLength === 2) {
-        // 双字符查询：使用较小的 maxResults
-        maxResultsToUse = 100;
-      } else if (queryLength <= 4) {
-        // 3-4字符查询：中等大小
-        maxResultsToUse = 200;
-      } else {
-        // 5+字符查询：可以使用更大的值
-        maxResultsToUse = 500;
-      }
-
-      // 保存当前搜索的 query
-      currentSearchQueryRef.current = trimmed;
-
-      // 如果相同查询的会话正在创建中，直接返回
-      if (creatingSessionQueryRef.current === trimmed) {
-        return;
-      }
-
-      // 检查是否已有相同查询的活跃会话
-      if (
-        pendingSessionIdRef.current &&
-        currentSearchQueryRef.current === trimmed
-      ) {
-        return;
-      }
-
-      // 标记正在创建会话
-      creatingSessionQueryRef.current = trimmed;
-
-      // 关闭旧会话（不阻塞，异步执行）
-      const oldSessionId = pendingSessionIdRef.current;
-      if (oldSessionId) {
-        // 不等待关闭完成，立即开始新搜索
-        closeSessionSafe(oldSessionId).catch(() => {
-          // 静默处理错误
-        });
-      }
-      // 在创建新会话前先清空 pendingSessionIdRef，防止旧的请求使用已失效的会话
-      pendingSessionIdRef.current = null;
-      // 注意：不要清空 currentSearchQueryRef.current，它应该保持当前查询
-      displayedSearchQueryRef.current = "";
-      setEverythingResults([]);
-      setEverythingTotalCount(null);
-      setEverythingCurrentCount(0);
-      setIsSearchingEverything(true);
-
-      try {
-        const sessionTimeoutMs = 60000; // 60秒超时
-        const sessionTimeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`创建搜索会话超时（${sessionTimeoutMs}ms）`));
-          }, sessionTimeoutMs);
-        });
-
-        const session = await Promise.race([
-          tauriApi.startEverythingSearchSession(trimmed, {
-            maxResults: maxResultsToUse,
-            chunkSize: 50, // 启动器使用较小的 chunk_size，提升响应速度
-          }),
-          sessionTimeoutPromise,
-        ]);
-
-        // 检查查询是否仍然有效
-        if (currentSearchQueryRef.current !== trimmed) {
-          await closeSessionSafe(session.sessionId);
-          pendingSessionIdRef.current = null;
-          creatingSessionQueryRef.current = null;
-          setIsSearchingEverything(false);
-          return;
-        }
-
-        pendingSessionIdRef.current = session.sessionId;
-        creatingSessionQueryRef.current = null;
-        // 保存针对该关键字查询到的实际总数（不受maxResults限制）
-        setEverythingTotalCount(session.totalCount ?? 0);
-
-        // 立即获取第一页结果（启动器只需要第一页）
-        const offset = 0;
-        const currentSessionId = session.sessionId;
-        const currentQueryForPage = trimmed;
-
-        const timeoutMs = 30000; // 30秒超时
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`获取首屏页超时（${timeoutMs}ms）`));
-          }, timeoutMs);
-        });
-
-        Promise.race([
-          tauriApi.getEverythingSearchRange(currentSessionId, offset, LAUNCHER_PAGE_SIZE, {}),
-          timeoutPromise,
-        ])
-          .then((res) => {
-            // 检查会话和查询是否仍然有效
-            const currentPendingSessionId = pendingSessionIdRef.current;
-            const isSessionStillValid = currentPendingSessionId === currentSessionId;
-            const isQueryStillValid = currentSearchQueryRef.current === currentQueryForPage;
-
-            if (!isSessionStillValid || !isQueryStillValid) {
-              if (!pendingSessionIdRef.current) {
-                setIsSearchingEverything(false);
-              }
-              return;
-            }
-
-            // 更新结果（使用 startTransition 避免阻塞输入框）
-            startTransition(() => {
-              setEverythingResults(res.items);
-              setEverythingCurrentCount(res.items.length);
-              setIsSearchingEverything(false);
-            });
-            displayedSearchQueryRef.current = trimmed;
-          })
-          .catch((error) => {
-            const currentPendingSessionId = pendingSessionIdRef.current;
-            const isSessionStillValid = currentPendingSessionId === currentSessionId;
-            const isQueryStillValid = currentSearchQueryRef.current === currentQueryForPage;
-
-            if (!isSessionStillValid || !isQueryStillValid) {
-              return;
-            }
-            const errorStr = typeof error === "string" ? error : String(error);
-            
-            // 检查是否是服务不可用错误
-            if (
-              errorStr.includes('NOT_INSTALLED') ||
-              errorStr.includes('SERVICE_NOT_RUNNING') ||
-              errorStr.includes('not found') ||
-              errorStr.includes('未找到') ||
-              errorStr.includes('未运行')
-            ) {
-              tauriApi.getEverythingStatus()
-                .then((status) => {
-                  setIsEverythingAvailable(status.available);
-                  setEverythingError(status.error || null);
-                })
-                .catch(() => {
-                  setIsEverythingAvailable(false);
-                  setEverythingError("搜索失败后无法重新检查状态");
-                });
-            }
-            
-            startTransition(() => {
-              setEverythingResults([]);
-              setEverythingTotalCount(null);
-              setEverythingCurrentCount(0);
-              setIsSearchingEverything(false);
-            });
-          });
-      } catch (error) {
-        creatingSessionQueryRef.current = null;
-        const errorStr = typeof error === "string" ? error : String(error);
-        if (
-          errorStr.includes('NOT_INSTALLED') ||
-          errorStr.includes('SERVICE_NOT_RUNNING') ||
-          errorStr.includes('not found') ||
-          errorStr.includes('未找到') ||
-          errorStr.includes('未运行')
-        ) {
-          tauriApi.getEverythingStatus()
-            .then((status) => {
-              setIsEverythingAvailable(status.available);
-              setEverythingError(status.error || null);
-            })
-            .catch(() => {
-              setIsEverythingAvailable(false);
-              setEverythingError("搜索失败后无法重新检查状态");
-            });
-        }
-        
-        startTransition(() => {
-          setEverythingResults([]);
-          setEverythingTotalCount(null);
-          setEverythingCurrentCount(0);
-          setIsSearchingEverything(false);
-        });
-      }
+      await startEverythingSearchSession({
+        searchQuery,
+        isEverythingAvailable,
+        setEverythingResults,
+        setEverythingTotalCount,
+        setEverythingCurrentCount,
+        setIsSearchingEverything,
+        setIsEverythingAvailable,
+        setEverythingError,
+        pendingSessionIdRef,
+        currentSearchQueryRef,
+        creatingSessionQueryRef,
+        displayedSearchQueryRef,
+        LAUNCHER_PAGE_SIZE,
+        LAUNCHER_MAX_RESULTS,
+        closeSessionSafe,
+        tauriApi,
+      });
     },
-    [isEverythingAvailable, closeSessionSafe]
+    [
+      isEverythingAvailable,
+      closeSessionSafe,
+      setEverythingResults,
+      setEverythingTotalCount,
+      setEverythingCurrentCount,
+      setIsSearchingEverything,
+      setIsEverythingAvailable,
+      setEverythingError,
+      tauriApi,
+    ]
   );
 
   // 组件卸载时清理 Everything 搜索会话
@@ -2509,92 +2014,29 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
     };
   }, [closeSessionSafe]);
 
-
   const handleCheckAgain = useCallback(async () => {
-    try {
-      // Force a fresh check with detailed status
-      const status = await tauriApi.getEverythingStatus();
-      
-      // 如果服务未运行，尝试自动启动
-      if (!status.available && status.error === "SERVICE_NOT_RUNNING") {
-        try {
-          await tauriApi.startEverything();
-          // 等待一下让 Everything 启动并初始化
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          // 重新检查状态
-          const newStatus = await tauriApi.getEverythingStatus();
-          setIsEverythingAvailable(newStatus.available);
-          setEverythingError(newStatus.error || null);
-          
-          if (!newStatus.available) {
-            console.warn("Everything 启动后仍未可用:", newStatus.error);
-          }
-          return;
-        } catch (error) {
-          console.error("自动启动 Everything 失败:", error);
-          setIsEverythingAvailable(false);
-          setEverythingError("无法自动启动 Everything，请手动启动");
-          return;
-        }
-      }
-      
-      setIsEverythingAvailable(status.available);
-      setEverythingError(status.error || null);
-      
-      if (status.available) {
-        const path = await tauriApi.getEverythingPath();
-        setEverythingPath(path);
-      }
-    } catch (error) {
-      console.error("Failed to check Everything:", error);
-      alert(`检测失败: ${error}`);
-    }
-  }, []);
+    await checkEverythingStatus({
+      setIsEverythingAvailable,
+      setEverythingError,
+      setEverythingPath,
+      tauriApi,
+    });
+  }, [setIsEverythingAvailable, setEverythingError, setEverythingPath, tauriApi]);
 
   const handleStartEverything = useCallback(async () => {
-    try {
-      await tauriApi.startEverything();
-      // 等待一下让 Everything 启动并初始化
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      // 重新检查状态
-      await handleCheckAgain();
-    } catch (error) {
-      console.error("启动 Everything 失败:", error);
-      alert(`启动失败: ${error}`);
-    }
-  }, [handleCheckAgain]);
+    await startEverythingService({
+      checkEverythingStatus: handleCheckAgain,
+      tauriApi,
+    });
+  }, [handleCheckAgain, tauriApi]);
 
   const handleDownloadEverything = useCallback(async () => {
-    try {
-
-      setIsDownloadingEverything(true);
-      setEverythingDownloadProgress(0);
-
-
-      const installerPath = await tauriApi.downloadEverything();
-
-      setEverythingDownloadProgress(100);
-
-      // 下载完成后，临时取消窗口置顶，确保安装程序显示在启动器之上
-      const window = getCurrentWindow();
-      await window.setAlwaysOnTop(false);
-
-      // 自动打开安装程序
-
-      await tauriApi.launchFile(installerPath);
-
-      // 下载逻辑结束，重置下载状态（不再弹出遮挡安装向导的提示框）
-      setIsDownloadingEverything(false);
-      setEverythingDownloadProgress(0);
-
-    } catch (error) {
-
-      setIsDownloadingEverything(false);
-      setEverythingDownloadProgress(0);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      alert(`下载失败: ${errorMessage}`);
-    }
-  }, []);
+    await downloadEverythingInstaller({
+      setIsDownloadingEverything,
+      setEverythingDownloadProgress,
+      tauriApi,
+    });
+  }, [setIsDownloadingEverything, setEverythingDownloadProgress, tauriApi]);
 
   const handleLaunch = useCallback(
     async (result: SearchResult) => {
