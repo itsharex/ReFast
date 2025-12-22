@@ -24,7 +24,7 @@ import {
 import { getThemeConfig, getLayoutConfig, type ResultStyle } from "../utils/themeConfig";
 import { handleEscapeKey, closePluginModalAndHide, closeMemoModalAndHide } from "../utils/launcherHandlers";
 import { clearAllResults, resetSelectedIndices, selectFirstHorizontal, selectFirstVertical, loadResultsIncrementally } from "../utils/resultUtils";
-import { adjustWindowSize, getMainContainer as getMainContainerUtil } from "../utils/windowUtils";
+import { getMainContainer as getMainContainerUtil } from "../utils/windowUtils";
 import { searchMemos, searchSystemFolders, searchApplications, searchFileHistory } from "../utils/searchUtils";
 import type { SearchResult } from "../utils/resultUtils";
 import { askOllama } from "../utils/ollamaUtils";
@@ -38,11 +38,19 @@ import {
   downloadEverythingInstaller,
 } from "../utils/everythingUtils";
 import { useLauncherInitialization } from "../hooks/useLauncherInitialization";
+import { useWindowSizeAdjustment } from "../hooks/useWindowSizeAdjustment";
 import {
   processPastedPath as processPastedPathUtil,
   handlePaste as handlePasteUtil,
   saveImageToDownloads,
 } from "../utils/pasteUtils";
+import {
+  handleContextMenuWithResult,
+  revealInFolder as revealInFolderUtil,
+  deleteHistory as deleteHistoryUtil,
+  editRemark as editRemarkUtil,
+  saveRemark as saveRemarkUtil,
+} from "../utils/contextMenuUtils";
 
 
 interface LauncherWindowProps {
@@ -1336,195 +1344,23 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
     }
   }, [results]);
 
-  useEffect(() => {
-    // 保存当前滚动位置（如果需要保持）
-    const needPreserveScroll = shouldPreserveScrollRef.current;
-    const savedScrollTop = needPreserveScroll && listRef.current 
-      ? listRef.current.scrollTop 
-      : null;
-    const savedScrollHeight = needPreserveScroll && listRef.current
-      ? listRef.current.scrollHeight
-      : null;
-    
-    // 如果需要保持滚动位置，在 DOM 更新后恢复
-    if (needPreserveScroll && savedScrollTop !== null && savedScrollHeight !== null) {
-      // 使用多个 requestAnimationFrame 确保 DOM 完全更新
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (listRef.current) {
-              const newScrollHeight = listRef.current.scrollHeight;
-              // 计算新的滚动位置（保持相对位置）
-              const scrollRatio = savedScrollTop / savedScrollHeight;
-              const newScrollTop = newScrollHeight * scrollRatio;
-              listRef.current.scrollTop = newScrollTop;
-              shouldPreserveScrollRef.current = false;
-            }
-          });
-        });
-      });
-    } else if (!needPreserveScroll && listRef.current) {
-      // 如果不是保持滚动位置，且列表有滚动，不要重置滚动位置
-      // 这样可以避免意外的滚动重置
-    }
-    
-    // 使用节流优化窗口大小调整，避免频繁调用导致卡顿
-    // 如果正在保持滚动位置，延迟窗口大小调整，让滚动位置先恢复
-    // 如果备忘录模态框打开，不在这里调整窗口大小（由专门的 useEffect 处理）
-    if (isMemoModalOpen) {
-      return;
-    }
-    
-    const delay = needPreserveScroll ? 600 : 100; // 减少延迟，让响应更快
-    const timeoutId = setTimeout(() => {
-      const adjustWindowSize = () => {
-        const window = getCurrentWindow();
-        const whiteContainer = getMainContainer();
-        if (whiteContainer && !isMemoModalOpen) {
-          // Use double requestAnimationFrame to ensure DOM is fully updated
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              // Use scrollWidth/scrollHeight to get the full content size
-              const containerHeight = whiteContainer.scrollHeight;
-              // Use saved window width
-              const targetWidth = windowWidth;
-              
-              // 限制最大高度，避免窗口突然撑高导致不丝滑
-              const MAX_HEIGHT = 600; // 最大高度600px
-              const MIN_HEIGHT = 200; // 最小高度200px，默认主界面更高
-              const targetHeight = Math.max(MIN_HEIGHT, Math.min(containerHeight, MAX_HEIGHT));
-              
-              // 直接设置窗口大小（简化版本，不使用动画过渡以避免复杂性）
-              window.setSize(new LogicalSize(targetWidth, targetHeight)).catch(console.error);
-            });
-          });
-        }
-      };
-      adjustWindowSize();
-    }, delay);
-    
-    return () => clearTimeout(timeoutId);
-  }, [debouncedCombinedResults, isMemoModalOpen]);
-
-    // Adjust window size when results actually change
-    useEffect(() => {
-      // 如果备忘录模态框打开，不在这里调整窗口大小
-      if (isMemoModalOpen) {
-        return;
-      }
-      
-      const adjustWindowSize = () => {
-        const window = getCurrentWindow();
-      const whiteContainer = getMainContainer();
-        if (whiteContainer && !isMemoModalOpen) {
-          // Use double requestAnimationFrame to ensure DOM is fully updated
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const containerRect = whiteContainer.getBoundingClientRect();
-              let containerHeight = containerRect.height;
-
-              // Use saved window width
-              const targetWidth = windowWidth;
-              
-              // 限制最大高度，避免窗口突然撑高导致不丝滑
-              const MAX_HEIGHT = 600;
-              const MIN_HEIGHT = 200;
-              const targetHeight = Math.max(MIN_HEIGHT, Math.min(containerHeight, MAX_HEIGHT));
-              
-              // 直接设置窗口大小（简化版本，不使用动画过渡以避免复杂性）
-              window.setSize(new LogicalSize(targetWidth, targetHeight)).catch(console.error);
-            });
-          });
-        }
-      };
-      
-      // Adjust size after results state updates (减少延迟)
-      setTimeout(adjustWindowSize, 100);
-    }, [results, isMemoModalOpen, windowWidth]);
-
-  // Update window size when windowWidth changes (but not during resizing)
-  useEffect(() => {
-    if (isMemoModalOpen || isPluginListModalOpen || isResizing) {
-      return;
-    }
-    
-    setTimeout(() => {
-      adjustWindowSize({
-        windowWidth,
-        isMemoModalOpen,
-        getContainer: getMainContainer,
-      });
-    }, 50);
-  }, [windowWidth, isMemoModalOpen, isPluginListModalOpen, isResizing]);
-
-
-  // Handle window width resizing
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const whiteContainer = getMainContainer();
-    if (!whiteContainer) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      // Cancel any pending animation frame
-      if (resizeRafId.current !== null) {
-        cancelAnimationFrame(resizeRafId.current);
-      }
-
-      // Use requestAnimationFrame to smooth out updates
-      resizeRafId.current = requestAnimationFrame(() => {
-        // Calculate new width based on mouse movement from start position
-        const deltaX = e.clientX - resizeStartX.current;
-        const newWidth = Math.max(400, Math.min(1200, resizeStartWidth.current + deltaX));
-        
-        // Update window size directly without triggering state update during drag
-        const window = getCurrentWindow();
-        const containerHeight = whiteContainer.scrollHeight;
-        const MAX_HEIGHT = 600;
-        const MIN_HEIGHT = 200;
-        const targetHeight = Math.max(MIN_HEIGHT, Math.min(containerHeight, MAX_HEIGHT));
-        
-        // Update container width directly for immediate visual feedback
-        whiteContainer.style.width = `${newWidth}px`;
-        
-        // Update window size
-        window.setSize(new LogicalSize(newWidth, targetHeight)).catch(console.error);
-      });
-    };
-
-    const handleMouseUp = () => {
-      // Cancel any pending animation frame
-      if (resizeRafId.current !== null) {
-        cancelAnimationFrame(resizeRafId.current);
-        resizeRafId.current = null;
-      }
-
-      // Get final width from container
-      const whiteContainer = getMainContainer();
-      if (whiteContainer) {
-        const finalWidth = whiteContainer.offsetWidth;
-        setWindowWidth(finalWidth);
-        localStorage.setItem('launcher-window-width', finalWidth.toString());
-      }
-
-      setIsResizing(false);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    return () => {
-      if (resizeRafId.current !== null) {
-        cancelAnimationFrame(resizeRafId.current);
-      }
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizing]);
+  // 使用自定义 hook 处理窗口大小调整
+  useWindowSizeAdjustment({
+    shouldPreserveScrollRef,
+    listRef,
+    resizeRafId,
+    resizeStartX,
+    resizeStartWidth,
+    isMemoModalOpen,
+    isPluginListModalOpen,
+    isResizing,
+    windowWidth,
+    debouncedCombinedResults,
+    results,
+    getMainContainer,
+    setWindowWidth,
+    setIsResizing,
+  });
 
   // Scroll selected item into view and adjust window size
   // 只在 selectedVerticalIndex 变化时滚动，避免在结果更新时意外滚动
@@ -2093,147 +1929,83 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
     ]
   );
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, result: SearchResult) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // 计算菜单位置，避免遮挡文字
-    // 如果右键位置在窗口右侧，将菜单显示在鼠标左侧
-    const windowWidth = window.innerWidth;
-    const menuWidth = 160; // min-w-[160px]
-    let x = e.clientX;
-    let y = e.clientY;
-    
-    // 如果菜单会超出右边界，调整到左侧
-    if (x + menuWidth > windowWidth) {
-      x = e.clientX - menuWidth;
-    }
-    
-    // 如果菜单会超出下边界，调整到上方
-    const menuHeight = 50; // 估算高度
-    if (y + menuHeight > window.innerHeight) {
-      y = e.clientY - menuHeight;
-    }
-    
-    setContextMenu({ x, y, result });
-  }, []);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, result: SearchResult) => {
+      handleContextMenuWithResult({
+        e,
+        result,
+        setContextMenu,
+      });
+    },
+    [setContextMenu]
+  );
 
   const handleRevealInFolder = useCallback(async () => {
-    if (!contextMenu) return;
-    
-    try {
-      const target = contextMenu.result;
-      const path = target.path;
-      console.log("Revealing in folder:", path);
-      // 为应用、文件和 Everything 结果都提供"打开所在文件夹"
-      if (
-        target.type === "file" ||
-        target.type === "everything" ||
-        target.type === "app"
-      ) {
-        // 对于文件类型，先检查文件是否存在
-        if (target.type === "file" || target.type === "everything") {
-          const pathItem = await tauriApi.checkPathExists(path);
-          if (!pathItem) {
-            // 文件不存在，自动删除历史记录
-            // 先关闭右键菜单
-            setContextMenu(null);
-            
-            try {
-              await tauriApi.deleteFileHistory(path);
-              // 刷新文件历史缓存
-              await refreshFileHistoryCache();
-              // 重新搜索以更新结果列表
-              if (query.trim()) {
-                await searchFileHistoryWrapper(query);
-              } else {
-                await searchFileHistoryWrapper("");
-              }
-              // 显示提示信息
-              setErrorMessage(`文件不存在，已自动从历史记录中删除该文件。`);
-            } catch (deleteError: any) {
-              console.error("Failed to delete file history:", deleteError);
-              setErrorMessage(`文件不存在，但删除历史记录失败：${deleteError}`);
-            }
-            return;
-          }
-        }
-        
-        // Use custom reveal_in_folder command to handle shell: protocol paths
-        await tauriApi.revealInFolder(path);
-        console.log("Reveal in folder called successfully");
-      }
-      setContextMenu(null);
-    } catch (error) {
-      console.error("Failed to reveal in folder:", error);
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      // 检查是否是父目录不存在的错误
-      if (errorMsg.includes("Parent directory does not exist")) {
-        alert(`无法打开文件夹：父目录不存在\n\n${errorMsg}`);
-      } else {
-        alert(`打开文件夹失败: ${errorMsg}`);
-      }
-      setContextMenu(null);
-    }
-  }, [contextMenu, query, refreshFileHistoryCache, setErrorMessage]);
+    await revealInFolderUtil({
+      contextMenu,
+      query,
+      setContextMenu,
+      setErrorMessage,
+      refreshFileHistoryCache,
+      searchFileHistoryWrapper,
+      tauriApi,
+    });
+  }, [
+    contextMenu,
+    query,
+    setContextMenu,
+    setErrorMessage,
+    refreshFileHistoryCache,
+    searchFileHistoryWrapper,
+    tauriApi,
+  ]);
 
-  const handleDeleteHistory = useCallback(async (key: string) => {
-    try {
-      await tauriApi.deleteOpenHistory(key);
-      // 重新加载 open history
-      const history = await tauriApi.getOpenHistory();
-      setOpenHistory(history);
-      // 删除备注
-      setUrlRemarks(prev => {
-        const newRemarks = { ...prev };
-        delete newRemarks[key];
-        return newRemarks;
+  const handleDeleteHistory = useCallback(
+    async (key: string) => {
+      await deleteHistoryUtil({
+        key,
+        setOpenHistory,
+        setUrlRemarks,
+        tauriApi,
       });
-      // combinedResults 会自动使用新的 openHistory，所以结果列表会自动更新
-    } catch (error) {
-      console.error("Failed to delete open history:", error);
-      throw error;
-    }
-  }, [setOpenHistory]);
+    },
+    [setOpenHistory, setUrlRemarks, tauriApi]
+  );
 
-  const handleEditRemark = useCallback(async (url: string) => {
-    try {
-      // 获取当前的备注（存储在 name 字段中）
-      const item = await tauriApi.getOpenHistoryItem(url);
-      setEditingRemarkUrl(url);
-      setRemarkText(item?.name || "");
-      setIsRemarkModalOpen(true);
-    } catch (error) {
-      console.error("Failed to get open history item:", error);
-      alert(`获取备注失败: ${error}`);
-    }
-  }, []);
+  const handleEditRemark = useCallback(
+    async (url: string) => {
+      await editRemarkUtil({
+        url,
+        setEditingRemarkUrl,
+        setRemarkText,
+        setIsRemarkModalOpen,
+        tauriApi,
+      });
+    },
+    [setEditingRemarkUrl, setRemarkText, setIsRemarkModalOpen, tauriApi]
+  );
 
   const handleSaveRemark = useCallback(async () => {
-    if (!editingRemarkUrl) return;
-    try {
-      const remark = remarkText.trim() || null;
-      const updatedItem = await tauriApi.updateOpenHistoryRemark(editingRemarkUrl, remark);
-      // 更新本地备注状态（备注存储在 name 字段中）
-      setUrlRemarks(prev => {
-        const newRemarks = { ...prev };
-        if (updatedItem.name) {
-          newRemarks[editingRemarkUrl] = updatedItem.name;
-        } else {
-          delete newRemarks[editingRemarkUrl];
-        }
-        return newRemarks;
-      });
-      // 刷新 openHistory 以更新时间戳
-      const history = await tauriApi.getOpenHistory();
-      setOpenHistory(history);
-      setIsRemarkModalOpen(false);
-      setEditingRemarkUrl(null);
-      setRemarkText("");
-    } catch (error) {
-      console.error("Failed to update remark:", error);
-      alert(`保存备注失败: ${error}`);
-    }
-  }, [editingRemarkUrl, remarkText]);
+    await saveRemarkUtil({
+      editingRemarkUrl,
+      remarkText,
+      setOpenHistory,
+      setUrlRemarks,
+      setIsRemarkModalOpen,
+      setEditingRemarkUrl,
+      setRemarkText,
+      tauriApi,
+    });
+  }, [
+    editingRemarkUrl,
+    remarkText,
+    setOpenHistory,
+    setUrlRemarks,
+    setIsRemarkModalOpen,
+    setEditingRemarkUrl,
+    setRemarkText,
+    tauriApi,
+  ]);
 
   const processPastedPath = useCallback(
     async (trimmedPath: string) => {
