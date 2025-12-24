@@ -1048,7 +1048,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                     onClick={() => handlePluginClick(plugin.id)}
                     className="group relative p-5 bg-white rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.98]"
                     style={{
-                      animation: `fadeInUp 0.3s ease-out ${index * 0.05}s both`,
+                      animation: `fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${index * 0.05}s both`,
                     }}
                   >
                     <div className="flex items-start gap-4">

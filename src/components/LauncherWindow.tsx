@@ -2541,7 +2541,7 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
                                 style={{
                                   animation: isLaunching 
                                     ? `launchApp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards` 
-                                    : `fadeInUp 0.18s ease-out ${execIndex * 0.02}s both`,
+                                    : `fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${execIndex * 0.04}s both`,
                                   marginLeft: execIndex === 0 && isSelected ? '10px' : '0px', // 第一个item选中时添加左边距，防止放大后被裁剪
                                   width: '80px',
                                   height: '80px',
@@ -2631,7 +2631,7 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
                   style={{
                     animation: isLaunching 
                       ? `launchApp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards` 
-                      : `fadeInUp 0.18s ease-out ${index * 0.02}s both`,
+                      : `fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${index * 0.04}s both`,
                   }}
                   title={result.type === "app" ? result.path : undefined}
                 >
