@@ -192,6 +192,8 @@ export class PluginLoader {
       json_formatter: () => import("./builtin/json_formatter/index"),
       // 计算稿纸插件
       calculator_pad: () => import("./builtin/calculator_pad/index"),
+      // Markdown 编辑器插件
+      markdown_editor: () => import("./builtin/markdown_editor/index"),
     };
 
     const importFn = pluginMap[pluginId];

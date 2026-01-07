@@ -98,6 +98,37 @@ export function createBuiltinPlugins(): Plugin[] {
       },
     },
     {
+      id: "markdown_editor",
+      name: "Markdown 编辑器",
+      description: "打开本地 Markdown 文件进行编辑和预览",
+      keywords: [
+        "markdown",
+        "md",
+        "编辑器",
+        "预览",
+        "markdown编辑器",
+        "markdown预览",
+        "md编辑器",
+        "md预览",
+        "bianjiqi",
+        "bjj",
+        "yulan",
+        "yl",
+        "markdown编辑",
+        "markdown查看",
+        "md编辑",
+        "md查看",
+      ],
+      execute: async (context) => {
+        // 打开独立的 Markdown 编辑器窗口
+        if (context.tauriApi) {
+          await context.tauriApi.showMarkdownEditorWindow();
+          // 关闭启动器
+          await context.hideLauncher();
+        }
+      },
+    },
+    {
       id: "memo_center",
       name: "备忘录",
       description: "查看和编辑已有的备忘录",

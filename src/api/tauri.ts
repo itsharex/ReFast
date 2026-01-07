@@ -396,6 +396,34 @@ export const tauriApi = {
     return invoke("show_json_formatter_window");
   },
 
+  async showMarkdownEditorWindow(): Promise<void> {
+    return invoke("show_markdown_editor_window");
+  },
+
+  async watchMarkdownFile(windowLabel: string, filePath: string): Promise<void> {
+    return invoke("watch_markdown_file", { windowLabel, filePath });
+  },
+
+  async unwatchMarkdownFile(windowLabel: string, filePath: string): Promise<void> {
+    return invoke("unwatch_markdown_file", { windowLabel, filePath });
+  },
+
+  async getMarkdownRecentFiles(): Promise<Array<{ path: string; name: string; lastOpened: number; title?: string }>> {
+    return invoke("get_markdown_recent_files");
+  },
+
+  async addMarkdownRecentFile(filePath: string): Promise<void> {
+    return invoke("add_markdown_recent_file", { filePath });
+  },
+
+  async addMarkdownRecentFileWithContent(filePath: string, content?: string): Promise<void> {
+    return invoke("add_markdown_recent_file_with_content", { filePath, content });
+  },
+
+  async removeMarkdownRecentFile(filePath: string): Promise<void> {
+    return invoke("remove_markdown_recent_file", { filePath });
+  },
+
   async showFileToolboxWindow(): Promise<void> {
     return invoke("show_file_toolbox_window");
   },

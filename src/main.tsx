@@ -15,6 +15,7 @@ import TranslationApp from "./TranslationApp";
 import { HexConverterApp } from "./HexConverterApp";
 import { ColorPickerApp } from "./ColorPickerApp";
 import ClipboardApp from "./ClipboardApp";
+import MarkdownEditorApp from "./MarkdownEditorApp";
 import { initializePlugins } from "./plugins";
 import { trackEvent } from "./api/events";
 import "./styles.css";
@@ -150,6 +151,13 @@ async function initApp() {
         </StrictMode>
       );
       console.log("[初始化] ClipboardApp 已渲染");
+    } else if (label === "markdown-editor-window") {
+      ReactDOM.createRoot(root).render(
+        <StrictMode>
+          <MarkdownEditorApp />
+        </StrictMode>
+      );
+      console.log("[初始化] MarkdownEditorApp 已渲染");
     } else if (label === "recording-window" || label === "main") {
       ReactDOM.createRoot(root).render(
         <StrictMode>

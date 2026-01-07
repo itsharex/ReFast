@@ -9,6 +9,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { AppIndexList } from "./AppIndexList";
 import { FileHistoryPanel } from "./FileHistoryPanel";
 import { formatSimpleDateTime } from "../utils/dateUtils";
+import { formatBytes, withTimeout } from "../utils/formatUtils";
+import { PluginsTab } from "./AppCenterContent/PluginsTab";
 
 // Icon extraction failure marker 和相关函数已移至 AppIndexList 组件
 
@@ -160,25 +162,6 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const formatTimestamp = (timestamp?: number | null) => {
     if (!timestamp) return "暂无";
     return formatSimpleDateTime(timestamp);
-  };
-
-  const formatBytes = (size?: number | null) => {
-    if (!size && size !== 0) return "未知";
-    if (size < 1024) return `${size} B`;
-    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-    if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  };
-
-
-  // 超时保护辅助函数
-  const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
-      ),
-    ]);
   };
 
   const loadUsersCount = useCallback(
@@ -859,253 +842,13 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
 
   // 事件监听器已移至 AppIndexList 组件
 
-  // 所有可用插件（排除 show_plugin_list，因为它就是用来显示插件列表的，不应该出现在列表里）
-  const availablePlugins = useMemo(() => {
-    return plugins.filter(plugin => plugin.id !== 'show_plugin_list');
-  }, [plugins]);
 
-  // 过滤插件
-  const filteredPlugins = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return availablePlugins;
-    }
-    const query = searchQuery.toLowerCase();
-    return availablePlugins.filter(
-      (plugin) =>
-        plugin.name.toLowerCase().includes(query) ||
-        plugin.description?.toLowerCase().includes(query) ||
-        plugin.keywords.some((keyword) => keyword.toLowerCase().includes(query))
-    );
-  }, [searchQuery, availablePlugins]);
-
-  // 根据插件ID获取对应的图标
-  const getPluginIcon = (pluginId: string) => {
-    const iconClass = "w-5 h-5";
-    switch (pluginId) {
-      case "everything_search":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-        );
-      case "json_formatter":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-          </svg>
-        );
-      case "calculator_pad":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-          </svg>
-        );
-      case "memo_center":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
-        );
-      case "show_main_window":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        );
-      case "show_plugin_list":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-          </svg>
-        );
-      case "file_toolbox":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-          </svg>
-        );
-      case "translation":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-          </svg>
-        );
-      case "hex_converter":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-          </svg>
-        );
-      case "clipboard":
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-          </svg>
-        );
-      default:
-        return (
-          <svg className={iconClass} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-          </svg>
-        );
-    }
-  };
-
-  // 根据插件ID获取图标背景渐变色
-  const getPluginIconBg = (pluginId: string) => {
-    switch (pluginId) {
-      case "everything_search":
-        return "bg-gradient-to-br from-blue-100 to-blue-200";
-      case "json_formatter":
-        return "bg-gradient-to-br from-purple-100 to-purple-200";
-      case "calculator_pad":
-        return "bg-gradient-to-br from-orange-100 to-orange-200";
-      case "memo_center":
-        return "bg-gradient-to-br from-green-100 to-green-200";
-      case "show_main_window":
-        return "bg-gradient-to-br from-indigo-100 to-indigo-200";
-      case "show_plugin_list":
-        return "bg-gradient-to-br from-teal-100 to-teal-200";
-      case "file_toolbox":
-        return "bg-gradient-to-br from-pink-100 to-pink-200";
-      case "translation":
-        return "bg-gradient-to-br from-cyan-100 to-cyan-200";
-      case "hex_converter":
-        return "bg-gradient-to-br from-amber-100 to-amber-200";
-      case "clipboard":
-        return "bg-gradient-to-br from-emerald-100 to-emerald-200";
-      default:
-        return "bg-gradient-to-br from-gray-100 to-gray-200";
-    }
-  };
-
-  // 根据插件ID获取图标颜色
-  const getPluginIconColor = (pluginId: string) => {
-    switch (pluginId) {
-      case "everything_search":
-        return "text-blue-600";
-      case "json_formatter":
-        return "text-purple-600";
-      case "calculator_pad":
-        return "text-orange-600";
-      case "memo_center":
-        return "text-green-600";
-      case "show_main_window":
-        return "text-indigo-600";
-      case "show_plugin_list":
-        return "text-teal-600";
-      case "file_toolbox":
-        return "text-pink-600";
-      case "translation":
-        return "text-cyan-600";
-      case "hex_converter":
-        return "text-amber-600";
-      case "clipboard":
-        return "text-emerald-600";
-      default:
-        return "text-gray-600";
-    }
-  };
 
   // 渲染当前分类的内容
   const renderContent = () => {
     switch (activeCategory) {
       case "plugins":
-        return (
-          <div className="space-y-4">
-            {filteredPlugins.length === 0 ? (
-              <div className="text-center py-16">
-                <svg
-                  className="w-16 h-16 mx-auto text-gray-300 mb-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                <div className="text-gray-500 text-lg font-medium">
-                  {searchQuery ? "未找到匹配的插件" : "暂无插件"}
-                </div>
-                {searchQuery && (
-                  <div className="text-gray-400 text-sm mt-2">
-                    尝试使用其他关键词搜索
-                  </div>
-                )}
-              </div>
-            ) : (
-              filteredPlugins.map((plugin, index) => {
-                const displayedKeywords = plugin.keywords?.slice(0, 6) || [];
-                const hasMoreKeywords = (plugin.keywords?.length || 0) > 6;
-                
-                return (
-                  <div
-                    key={plugin.id}
-                    onClick={() => handlePluginClick(plugin.id)}
-                    className="group relative p-5 bg-white rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-lg transition-all duration-200 cursor-pointer active:scale-[0.98]"
-                    style={{
-                      animation: `fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${index * 0.05}s both`,
-                    }}
-                  >
-                    <div className="flex items-start gap-4">
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${getPluginIconBg(plugin.id)} group-hover:scale-110 transition-transform duration-200 shadow-sm`}>
-                        <div className={getPluginIconColor(plugin.id)}>
-                          {getPluginIcon(plugin.id)}
-                        </div>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-gray-900 text-base mb-1.5 group-hover:text-gray-700 transition-colors">
-                          {plugin.name}
-                        </div>
-                        {plugin.description && (
-                          <div className="text-sm text-gray-600 leading-relaxed mb-3">
-                            {plugin.description}
-                          </div>
-                        )}
-                        {displayedKeywords.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {displayedKeywords.map((keyword, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2.5 py-1 text-xs bg-gray-50 text-gray-600 rounded-md border border-gray-200 hover:bg-gray-100 transition-colors"
-                              >
-                                {keyword}
-                              </span>
-                            ))}
-                            {hasMoreKeywords && (
-                              <span className="px-2.5 py-1 text-xs bg-gray-50 text-gray-500 rounded-md border border-gray-200">
-                                +{(plugin.keywords?.length || 0) - 6}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {/* 悬停时的装饰性边框 */}
-                    <div className="absolute inset-0 rounded-xl border-2 border-transparent group-hover:border-green-200 pointer-events-none transition-colors duration-200" />
-                  </div>
-                );
-              })
-            )}
-            {/* 插件统计信息 - 显示在列表底部 */}
-            <div className="mt-6 pt-6 border-t border-gray-200 flex items-center justify-center gap-4 text-sm">
-              <div className="text-gray-600">
-                共 <span className="font-medium text-green-600">{availablePlugins.length}</span> 个插件
-                {searchQuery && (
-                  <span className="ml-1 text-gray-500">
-                    （找到 <span className="font-medium text-green-600">{filteredPlugins.length}</span> 个）
-                  </span>
-                )}
-              </div>
-              <div className="text-gray-400">•</div>
-              <div className="text-gray-500">插件持续开发优化中...</div>
-            </div>
-          </div>
-        );
+        return <PluginsTab searchQuery={searchQuery} onPluginClick={handlePluginClick} />;
       case "index": {
         const toneClassMap: Record<string, string> = {
           success: "bg-gradient-to-br from-green-50 to-green-100/70 border-green-200",

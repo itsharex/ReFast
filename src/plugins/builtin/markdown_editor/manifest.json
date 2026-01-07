@@ -1,0 +1,27 @@
+{
+  "id": "markdown_editor",
+  "name": "Markdown 编辑器",
+  "version": "1.0.0",
+  "description": "打开本地 Markdown 文件进行编辑和预览",
+  "keywords": [
+    "markdown",
+    "md",
+    "编辑器",
+    "预览",
+    "markdown编辑器",
+    "markdown预览",
+    "md编辑器",
+    "md预览",
+    "bianjiqi",
+    "bjj",
+    "yulan",
+    "yl",
+    "markdown编辑",
+    "markdown查看",
+    "md编辑",
+    "md查看"
+  ],
+  "entry": "./index.ts",
+  "enabled": true
+}
+

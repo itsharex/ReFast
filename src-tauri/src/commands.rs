@@ -4769,6 +4769,45 @@ pub async fn show_json_formatter_window(app: tauri::AppHandle) -> Result<(), Str
 }
 
 #[tauri::command]
+pub async fn show_markdown_editor_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    use crate::file_watcher;
+
+    // 尝试获取现有窗口
+    if let Some(window) = app.get_webview_window("markdown-editor-window") {
+        show_and_focus_window(&window)?;
+    } else {
+        // 动态创建窗口
+        let window = tauri::WebviewWindowBuilder::new(
+            &app,
+            "markdown-editor-window",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("Markdown 编辑器")
+        .inner_size(1000.0, 700.0)
+        .resizable(true)
+        .min_inner_size(800.0, 600.0)
+        .center()
+        .build()
+        .map_err(|e| format!("创建 Markdown 编辑器窗口失败: {}", e))?;
+        
+        // 确保新创建的窗口显示并聚焦
+        show_and_focus_window(&window)?;
+        
+        // 监听窗口关闭事件，清理文件监听
+        let app_clone = app.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // 停止该窗口的所有文件监听
+                let _ = file_watcher::unwatch_window("markdown-editor-window".to_string());
+            }
+        });
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn show_translation_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
 
@@ -5434,6 +5473,67 @@ pub fn read_plugin_manifest(plugin_dir: String) -> Result<String, String> {
         .map_err(|e| format!("Failed to read manifest: {}", e))?;
     
     Ok(content)
+}
+
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    use std::fs;
+    let file_path = PathBuf::from(path);
+    if !file_path.exists() {
+        return Err("文件不存在".to_string());
+    }
+    
+    let content = fs::read_to_string(&file_path)
+        .map_err(|e| format!("读取文件失败: {}", e))?;
+    
+    Ok(content)
+}
+
+#[tauri::command]
+pub async fn watch_markdown_file(
+    app: tauri::AppHandle,
+    window_label: String,
+    file_path: String,
+) -> Result<(), String> {
+    use crate::file_watcher;
+    file_watcher::watch_file(app, window_label, file_path)
+}
+
+#[tauri::command]
+pub fn unwatch_markdown_file(
+    window_label: String,
+    file_path: String,
+) -> Result<(), String> {
+    use crate::file_watcher;
+    file_watcher::unwatch_file(window_label, file_path)
+}
+
+#[tauri::command]
+pub fn get_markdown_recent_files(app: tauri::AppHandle) -> Result<Vec<crate::markdown_recent_files::RecentFile>, String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    crate::markdown_recent_files::get_all_recent_files(&app_data_dir)
+}
+
+#[tauri::command]
+pub fn add_markdown_recent_file(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    crate::markdown_recent_files::add_recent_file(&app_data_dir, file_path)
+}
+
+#[tauri::command]
+pub fn add_markdown_recent_file_with_content(
+    app: tauri::AppHandle,
+    file_path: String,
+    content: Option<String>,
+) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    crate::markdown_recent_files::add_recent_file_with_content(&app_data_dir, file_path, content)
+}
+
+#[tauri::command]
+pub fn remove_markdown_recent_file(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
+    let app_data_dir = get_app_data_dir(&app)?;
+    crate::markdown_recent_files::remove_recent_file(&app_data_dir, file_path)
 }
 
 // ===== Settings commands =====

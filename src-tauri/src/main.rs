@@ -24,6 +24,8 @@ mod system_folders_search;
 mod window_config;
 mod clipboard;
 mod word_records;
+mod file_watcher;
+mod markdown_recent_files;
 
 use crate::commands::get_app_data_dir;
 use commands::*;
@@ -593,8 +595,10 @@ fn main() {
             let app_data_dir_clone = app_data_dir.clone();
             std::thread::spawn(move || {
                 open_history::load_history(&app_data_dir_clone).ok(); // Ignore errors if file doesn't exist
+                markdown_recent_files::load_recent_files(&app_data_dir_clone).ok(); // Ignore errors if file doesn't exist
             });
             open_history::load_history(&app_data_dir).ok(); // Ignore errors if file doesn't exist
+            markdown_recent_files::load_recent_files(&app_data_dir).ok(); // Ignore errors if file doesn't exist
             shortcuts::load_shortcuts(&app_data_dir).ok(); // Ignore errors if file doesn't exist
 
             // Sync startup setting on Windows
@@ -762,6 +766,7 @@ fn main() {
             show_memo_window,
             show_plugin_list_window,
             show_json_formatter_window,
+            show_markdown_editor_window,
             show_translation_window,
             show_hex_converter_window,
             // show_color_picker_window,  // 暂时屏蔽，待优化
@@ -775,6 +780,13 @@ fn main() {
             get_plugin_directory,
             scan_plugin_directory,
             read_plugin_manifest,
+            read_text_file,
+            watch_markdown_file,
+            unwatch_markdown_file,
+            get_markdown_recent_files,
+            add_markdown_recent_file,
+            add_markdown_recent_file_with_content,
+            remove_markdown_recent_file,
             get_settings,
             save_settings,
             get_everything_custom_filters,
