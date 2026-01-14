@@ -1377,7 +1377,7 @@ export function MarkdownEditorWindow() {
                         );
                       },
                       p: ({ node, ...props }) => (
-                        <p style={{ marginTop: "1em", marginBottom: "1em", lineHeight: "1.6" }} {...props} />
+                        <p style={{ marginTop: "0", marginBottom: "0.75em", lineHeight: "1.6" }} {...props} />
                       ),
                       code: ({ node, inline, ...props }: any) => {
                         if (inline) {
