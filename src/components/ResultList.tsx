@@ -30,6 +30,7 @@ export interface ResultListProps {
   onSaveImageToDownloads: (path: string) => Promise<void>;
   horizontalScrollContainerRef: React.RefObject<HTMLDivElement>;
   listRef: React.RefObject<HTMLDivElement>;
+  isHorizontalResultsStable?: boolean;
 }
 
 /**
@@ -48,9 +49,13 @@ const HorizontalResultItem = React.memo<{
   getPluginIcon: (pluginId: string, className: string) => JSX.Element;
   onLaunch: (result: SearchResult) => Promise<void>;
   onContextMenu: (e: React.MouseEvent, result: SearchResult) => void;
-}>(({ result, index, isSelected, isLaunching, query, resultStyle, theme, apps, filteredApps, getPluginIcon, onLaunch, onContextMenu }) => {
+  isStable?: boolean;
+}>(({ result, index, isSelected, isLaunching, query, resultStyle, theme, apps, filteredApps, getPluginIcon, onLaunch, onContextMenu, isStable = true }) => {
+  const itemRef = React.useRef<HTMLDivElement | null>(null);
+
   return (
     <div
+      ref={itemRef}
       key={`executable-${result.path}-${index}`}
       onMouseDown={async (e) => {
         if (e.button !== 0) return;
@@ -73,6 +78,7 @@ const HorizontalResultItem = React.memo<{
           : "bg-white hover:bg-gray-50 border border-gray-200 hover:border-gray-300 hover:shadow-md"
       } ${isLaunching ? 'rocket-launching' : ''}`}
       style={{
+        '--target-opacity': !isStable ? 0.6 : 1,
         animation: isLaunching 
           ? `launchApp 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards` 
           : `fadeInUp 0.35s cubic-bezier(0.16, 1, 0.3, 1) ${index * 0.04}s both`,
@@ -81,7 +87,10 @@ const HorizontalResultItem = React.memo<{
         height: '80px',
         minWidth: '80px',
         minHeight: '80px',
-      }}
+        opacity: !isStable ? 0.6 : 1,
+        transition: 'opacity 0.2s ease-in-out',
+        pointerEvents: !isStable ? 'none' : 'auto',
+      } as React.CSSProperties}
       title={result.type === "app" ? result.path : undefined}
     >
       {isSelected && (
@@ -417,7 +426,9 @@ export const ResultList = React.memo<ResultListProps>(({
   onSaveImageToDownloads,
   horizontalScrollContainerRef,
   listRef,
+  isHorizontalResultsStable = true,
 }) => {
+
   const theme = React.useMemo(() => getThemeConfig(resultStyle), [resultStyle]);
 
   return (
@@ -449,6 +460,7 @@ export const ResultList = React.memo<ResultListProps>(({
                   getPluginIcon={getPluginIcon}
                   onLaunch={onLaunch}
                   onContextMenu={onContextMenu}
+                  isStable={isHorizontalResultsStable}
                 />
               ))}
             </div>

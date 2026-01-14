@@ -833,6 +833,37 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
     apps,
     extractedFileIconsRef,
   });
+  
+  // 跟踪 horizontalResults 的稳定性
+  const [isHorizontalResultsStable, setIsHorizontalResultsStable] = useState(true);
+  const horizontalResultsStabilityTimeoutRef = useRef<number | null>(null);
+  const previousHorizontalResultsLengthRef = useRef<number>(0);
+  
+  useEffect(() => {
+    // 当 horizontalResults 长度变化时，标记为不稳定
+    if (horizontalResults.length !== previousHorizontalResultsLengthRef.current) {
+      previousHorizontalResultsLengthRef.current = horizontalResults.length;
+      setIsHorizontalResultsStable(false);
+      
+      // 清除之前的 timeout
+      if (horizontalResultsStabilityTimeoutRef.current !== null) {
+        clearTimeout(horizontalResultsStabilityTimeoutRef.current);
+      }
+      
+      // 设置新的 timeout，300ms 后如果长度没有变化，认为稳定
+      horizontalResultsStabilityTimeoutRef.current = window.setTimeout(() => {
+        setIsHorizontalResultsStable(true);
+        horizontalResultsStabilityTimeoutRef.current = null;
+      }, 300);
+    }
+    
+    return () => {
+      if (horizontalResultsStabilityTimeoutRef.current !== null) {
+        clearTimeout(horizontalResultsStabilityTimeoutRef.current);
+        horizontalResultsStabilityTimeoutRef.current = null;
+      }
+    };
+  }, [horizontalResults.length]);
 
   // 使用 ref 跟踪最后一次加载结果时的查询，用于验证结果是否仍然有效
   const lastLoadQueryRef = useRef<string>("");
@@ -2240,6 +2271,7 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
               onSaveImageToDownloads={handleSaveImageToDownloads}
               horizontalScrollContainerRef={horizontalScrollContainerRef}
               listRef={listRef}
+              isHorizontalResultsStable={isHorizontalResultsStable}
             />
           ) : null}
 

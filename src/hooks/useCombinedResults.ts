@@ -3,7 +3,7 @@
  * 负责将各种搜索结果合并为统一的结果列表
  */
 
-import { useState, useEffect, useRef, useDeferredValue } from "react";
+import { useState, useEffect, useRef, useDeferredValue, useMemo } from "react";
 import { startTransition } from "react";
 import { computeCombinedResults } from "../utils/combineResultsUtils";
 import type { SearchResult } from "../utils/resultUtils";
@@ -104,6 +104,16 @@ export function useCombinedResults(options: UseCombinedResultsOptions) {
   // 直接使用 combinedResults 作为 debouncedCombinedResults，不再使用防抖
   const debouncedCombinedResults = combinedResults;
 
+  // 判断结果是否稳定：如果 combinedResultsRaw 和 combinedResults 引用相同，说明稳定
+  // useDeferredValue 会在合适的时机更新 combinedResults，如果引用不同说明还在更新中
+  // 使用 useMemo 来避免每次渲染都重新计算
+  const isStable = useMemo(() => {
+    // 如果引用相同，说明稳定（useDeferredValue 在值相同时可能返回相同引用）
+    // 如果引用不同，说明 combinedResults 还没有更新到 combinedResultsRaw 的最新值，即结果还在更新中
+    const stable = combinedResultsRaw === combinedResults;
+    return stable;
+  }, [combinedResultsRaw, combinedResults]);
+
   // 使用 ref 来跟踪当前的 query，避免闭包问题
   const queryRef = useRef(query);
   useEffect(() => {
@@ -122,6 +132,7 @@ export function useCombinedResults(options: UseCombinedResultsOptions) {
     combinedResults: debouncedCombinedResults,
     queryRef,
     debouncedResultsQueryRef,
+    isStable,
   };
 }
 

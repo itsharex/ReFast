@@ -122,7 +122,19 @@ div.results-list-scroll::-webkit-scrollbar-thumb:active {
     transform: translateY(25px) scale(0.95);
   }
   to {
-    opacity: 1;
+    opacity: var(--target-opacity, 1);
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 不稳定状态的淡入动画 */
+@keyframes fadeInUpUnstable {
+  from {
+    opacity: 0;
+    transform: translateY(25px) scale(0.95);
+  }
+  to {
+    opacity: 0.6;
     transform: translateY(0) scale(1);
   }
 }
