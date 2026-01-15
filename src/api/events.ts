@@ -176,6 +176,31 @@ export async function fetchUsersCount(from?: string, to?: string): Promise<numbe
   }
 }
 
+export async function fetchDailyUserCounts(from?: string, to?: string): Promise<
+  Array<{
+    date: string;
+    count: number;
+  }>
+> {
+  const qs = new URLSearchParams();
+  if (from) qs.set("from", from);
+  if (to) qs.set("to", to);
+
+  try {
+    const res = await fetch(
+      `${EVENTS_BASE}/users/daily${qs.toString() ? `?${qs.toString()}` : ""}`,
+      { headers: defaultHeaders }
+    );
+    if (!res.ok) {
+      throw new Error(`Events daily user counts failed: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  } catch (error) {
+    console.warn("[events] fetchDailyUserCounts failed", error);
+    return [];
+  }
+}
+
 /**
  * Fire-and-forget tracking helper.
  */

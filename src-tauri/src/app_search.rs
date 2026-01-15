@@ -144,6 +144,10 @@ pub mod windows {
             env::var("PROGRAMDATA")
                 .ok()
                 .map(|p| PathBuf::from(p).join("Microsoft/Windows/Start Menu/Programs")),
+            // Add Local AppData Programs folder (where apps like Trae, VS Code often install)
+            env::var("LOCALAPPDATA")
+                .ok()
+                .map(|p| PathBuf::from(p).join("Programs")),
         ];
 
         // Desktop paths - scan user desktop and public desktop

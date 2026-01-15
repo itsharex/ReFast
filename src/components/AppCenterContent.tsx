@@ -4,13 +4,37 @@ import type { PluginContext, IndexStatus, DatabaseBackupInfo, PluginUsage } from
 import { tauriApi } from "../api/tauri";
 import { listen, emit } from "@tauri-apps/api/event";
 import { OllamaSettingsPage, SystemSettingsPage, AboutSettingsPage, LauncherSettingsPage } from "./SettingsPages";
-import { fetchUsersCount } from "../api/events";
+import { fetchUsersCount, fetchDailyUserCounts } from "../api/events";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { AppIndexList } from "./AppIndexList";
 import { FileHistoryPanel } from "./FileHistoryPanel";
 import { formatSimpleDateTime } from "../utils/dateUtils";
 import { formatBytes, withTimeout } from "../utils/formatUtils";
 import { PluginsTab } from "./AppCenterContent/PluginsTab";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
+} from "chart.js";
+import { Line } from "react-chartjs-2";
+
+// 注册 Chart.js 组件
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 // Icon extraction failure marker 和相关函数已移至 AppIndexList 组件
 
@@ -153,6 +177,14 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
   const [isLoadingUsersCount, setIsLoadingUsersCount] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
   const ALL_TIME_FROM = "1970-01-01"; // 用于覆盖后端默认 7 天范围，统计全部时间
+  const [todayActiveUsers, setTodayActiveUsers] = useState<number | null>(null);
+  const [isLoadingTodayActiveUsers, setIsLoadingTodayActiveUsers] = useState(false);
+  const [todayActiveUsersError, setTodayActiveUsersError] = useState<string | null>(null);
+  const [dailyUserCounts, setDailyUserCounts] = useState<
+    Array<{ date: string; count: number }>
+  >([]);
+  const [isLoadingDailyUserCounts, setIsLoadingDailyUserCounts] = useState(false);
+  const [dailyUserCountsError, setDailyUserCountsError] = useState<string | null>(null);
   const [pluginUsage, setPluginUsage] = useState<PluginUsage[]>([]);
   const [isLoadingPluginUsage, setIsLoadingPluginUsage] = useState(false);
   const [pluginUsageError, setPluginUsageError] = useState<string | null>(null);
@@ -163,6 +195,15 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     if (!timestamp) return "暂无";
     return formatSimpleDateTime(timestamp);
   };
+
+  // 获取今天的日期字符串（格式：YYYY-MM-DD）
+  const getTodayDateString = useCallback(() => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }, []);
 
   const loadUsersCount = useCallback(
     async (fromOverride?: string, toOverride?: string) => {
@@ -183,6 +224,51 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
     },
     []
   );
+
+  const loadTodayActiveUsers = useCallback(async () => {
+    setIsLoadingTodayActiveUsers(true);
+    setTodayActiveUsersError(null);
+    const today = getTodayDateString();
+
+    try {
+      const count = await fetchUsersCount(today, today);
+      setTodayActiveUsers(count);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "获取失败";
+      setTodayActiveUsersError(message);
+    } finally {
+      setIsLoadingTodayActiveUsers(false);
+    }
+  }, [getTodayDateString]);
+
+  // 获取过去7天的日期范围
+  const getLast7DaysRange = useCallback(() => {
+    const today = new Date();
+    const to = getTodayDateString();
+    const fromDate = new Date(today);
+    fromDate.setDate(today.getDate() - 6); // 过去7天（包含今天）
+    const year = fromDate.getFullYear();
+    const month = String(fromDate.getMonth() + 1).padStart(2, "0");
+    const day = String(fromDate.getDate()).padStart(2, "0");
+    const from = `${year}-${month}-${day}`;
+    return { from, to };
+  }, [getTodayDateString]);
+
+  const loadDailyUserCounts = useCallback(async () => {
+    setIsLoadingDailyUserCounts(true);
+    setDailyUserCountsError(null);
+
+    try {
+      const { from, to } = getLast7DaysRange();
+      const data = await fetchDailyUserCounts(from, to);
+      setDailyUserCounts(data);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "获取失败";
+      setDailyUserCountsError(message);
+    } finally {
+      setIsLoadingDailyUserCounts(false);
+    }
+  }, [getLast7DaysRange]);
 
   const pluginNameMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -242,6 +328,18 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
       void loadUsersCount(ALL_TIME_FROM, "");
     }
   }, [ALL_TIME_FROM, activeCategory, isLoadingUsersCount, loadUsersCount, usersCount]);
+
+  useEffect(() => {
+    if (activeCategory === "statistics" && todayActiveUsers === null && !isLoadingTodayActiveUsers) {
+      void loadTodayActiveUsers();
+    }
+  }, [activeCategory, isLoadingTodayActiveUsers, loadTodayActiveUsers, todayActiveUsers]);
+
+  useEffect(() => {
+    if (activeCategory === "statistics" && dailyUserCounts.length === 0 && !isLoadingDailyUserCounts) {
+      void loadDailyUserCounts();
+    }
+  }, [activeCategory, isLoadingDailyUserCounts, loadDailyUserCounts, dailyUserCounts.length]);
 
   useEffect(() => {
     if (
@@ -1108,8 +1206,17 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
             value: isLoadingUsersCount ? "加载中..." : usersCount !== null ? usersCount.toLocaleString() : "—",
             desc: statsError ? `获取失败：${statsError}` : "按时间范围统计去重用户数",
           },
-          { title: "活跃趋势", value: "开发中", desc: "计划支持日/周/月活跃与留存" },
-          { title: "功能热度", value: "规划中", desc: "用于了解功能点击、使用占比" },
+          {
+            title: "今日活跃",
+            value: isLoadingTodayActiveUsers
+              ? "加载中..."
+              : todayActiveUsers !== null
+                ? todayActiveUsers.toLocaleString()
+                : "—",
+            desc: todayActiveUsersError
+              ? `获取失败：${todayActiveUsersError}`
+              : "今日活跃用户数（去重）",
+          },
         ];
 
         const roadmap = [
@@ -1131,7 +1238,7 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               {summaryCards.map((card) => (
                 <div key={card.title} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
                   <div className="text-sm text-gray-500">{card.title}</div>
@@ -1139,6 +1246,166 @@ export function AppCenterContent({ onPluginClick, onClose: _onClose }: AppCenter
                   <div className="mt-1 text-xs text-gray-500">{card.desc}</div>
                 </div>
               ))}
+            </div>
+
+            <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-gray-900">每日活跃用户数趋势</div>
+                  <div className="text-sm text-gray-500">过去7天的每日活跃用户数（去重）</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {dailyUserCountsError && <span className="text-xs text-red-500">{dailyUserCountsError}</span>}
+                  <button
+                    onClick={() => void loadDailyUserCounts()}
+                    className="px-3 py-2 text-xs rounded-lg bg-blue-50 text-blue-700 border border-blue-200 hover:border-blue-300 transition disabled:opacity-50"
+                    disabled={isLoadingDailyUserCounts}
+                  >
+                    {isLoadingDailyUserCounts ? "刷新中..." : "刷新"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                {isLoadingDailyUserCounts && <div className="text-xs text-gray-500">加载中...</div>}
+                {!isLoadingDailyUserCounts && dailyUserCountsError && (
+                  <div className="text-xs text-red-500">{dailyUserCountsError}</div>
+                )}
+                {!isLoadingDailyUserCounts && !dailyUserCountsError && dailyUserCounts.length === 0 && (
+                  <div className="text-xs text-gray-500">暂无数据</div>
+                )}
+                {!isLoadingDailyUserCounts && dailyUserCounts.length > 0 && (
+                  <div className="w-full">
+                    {(() => {
+                      // 确保数据按日期排序
+                      const sortedData = [...dailyUserCounts].sort((a, b) => 
+                        new Date(a.date).getTime() - new Date(b.date).getTime()
+                      );
+
+                      // 准备 Chart.js 数据格式
+                      const labels = sortedData.map((item) => {
+                        const date = new Date(item.date);
+                        return date.toLocaleDateString("zh-CN", {
+                          month: "short",
+                          day: "numeric",
+                        });
+                      });
+
+                      const data = sortedData.map((item) => item.count);
+
+                      // Chart.js 配置
+                      const chartData = {
+                        labels,
+                        datasets: [
+                          {
+                            label: "活跃用户数",
+                            data,
+                            borderColor: "rgb(59, 130, 246)",
+                            backgroundColor: (context: any) => {
+                              const ctx = context.chart.ctx;
+                              const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+                              gradient.addColorStop(0, "rgba(59, 130, 246, 0.25)");
+                              gradient.addColorStop(0.5, "rgba(59, 130, 246, 0.1)");
+                              gradient.addColorStop(1, "rgba(59, 130, 246, 0)");
+                              return gradient;
+                            },
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            pointBackgroundColor: "rgb(255, 255, 255)",
+                            pointBorderColor: "rgb(59, 130, 246)",
+                            pointBorderWidth: 2,
+                            pointHoverBackgroundColor: "rgb(59, 130, 246)",
+                            pointHoverBorderColor: "rgb(255, 255, 255)",
+                            pointHoverBorderWidth: 2,
+                          },
+                        ],
+                      };
+
+                      const chartOptions: any = {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                          legend: {
+                            display: false,
+                          },
+                          tooltip: {
+                            backgroundColor: "rgba(17, 24, 39, 0.9)",
+                            padding: 12,
+                            titleFont: {
+                              size: 12,
+                            },
+                            bodyFont: {
+                              size: 14,
+                            },
+                            titleColor: "rgb(255, 255, 255)",
+                            bodyColor: "rgb(255, 255, 255)",
+                            borderColor: "rgba(255, 255, 255, 0.1)",
+                            borderWidth: 1,
+                            displayColors: false,
+                            callbacks: {
+                              title: (context: any) => {
+                                const index = context[0].dataIndex;
+                                const date = new Date(sortedData[index].date);
+                                return date.toLocaleDateString("zh-CN", {
+                                  year: "numeric",
+                                  month: "long",
+                                  day: "numeric",
+                                });
+                              },
+                              label: (context: any) => {
+                                return `活跃用户: ${context.parsed.y.toLocaleString()} 人`;
+                              },
+                            },
+                          },
+                        },
+                        scales: {
+                          x: {
+                            grid: {
+                              display: false,
+                            },
+                            ticks: {
+                              color: "rgb(107, 114, 128)",
+                              font: {
+                                size: 11,
+                              },
+                            },
+                          },
+                          y: {
+                            beginAtZero: true,
+                            grid: {
+                              color: "rgba(229, 231, 235, 0.5)",
+                              drawBorder: false,
+                            },
+                            ticks: {
+                              color: "rgb(107, 114, 128)",
+                              font: {
+                                size: 11,
+                              },
+                              callback: function (value: any) {
+                                return value.toLocaleString();
+                              },
+                            },
+                          },
+                        },
+                        interaction: {
+                          intersect: false,
+                          mode: "index" as const,
+                        },
+                      };
+
+                      return (
+                        <div className="w-full bg-gradient-to-b from-gray-50/80 to-gray-50/30 rounded-2xl border border-gray-100 p-4">
+                          <div style={{ height: "200px" }}>
+                            <Line data={chartData} options={chartOptions} />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
