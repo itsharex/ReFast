@@ -75,6 +75,259 @@ pub mod windows {
         app_data_dir.join("app_cache.json")
     }
 
+    // Constants
+    const MAX_SEARCH_RESULTS: usize = 20;
+    const MAX_PERFECT_MATCHES: usize = 3;
+    const ICON_SIZE: u32 = 32;
+    const MAX_SCAN_DEPTH: usize = 3;
+    const MAX_APPS: usize = 2000;
+    const WINDOWSAPPS_PATH: &str = "windowsapps";
+    const RECENT_PATH: &str = "recent";
+
+    // Helper function to check if a path is a WindowsApps path
+    fn is_windowsapps_path(path: &str) -> bool {
+        path.to_lowercase().contains(WINDOWSAPPS_PATH)
+    }
+
+    // Helper function to check if a path is a Recent directory path
+    fn is_recent_path(path: &str) -> bool {
+        let path_lower = path.to_lowercase();
+        path_lower.contains("\\recent") || path_lower.contains("/recent")
+    }
+
+    // Helper function to filter out WindowsApps paths from app list
+    fn filter_windowsapps_paths(apps: &mut Vec<AppInfo>) {
+        apps.retain(|app| !is_windowsapps_path(&app.path));
+    }
+
+    // Helper function to normalize path for comparison
+    fn normalize_path(path: &str) -> String {
+        path.to_lowercase().replace('\\', "/")
+    }
+
+    // Helper function to get app priority for sorting
+    fn app_priority(app: &AppInfo) -> u8 {
+        let path = app.path.to_lowercase();
+        if path.ends_with(".exe") {
+            0
+        } else if path.ends_with(".lnk") {
+            1
+        } else if path.starts_with("shell:appsfolder") {
+            3
+        } else {
+            2
+        }
+    }
+
+    // Helper function to get Settings app priority for sorting
+    fn settings_app_priority(path: &str) -> u8 {
+        if path.starts_with("shell:AppsFolder") {
+            0
+        } else if path.starts_with("ms-settings:") {
+            1
+        } else {
+            2
+        }
+    }
+
+    // Helper function to get Calculator app priority for sorting
+    fn calculator_app_priority(path: &str) -> u8 {
+        if path.starts_with("shell:AppsFolder") {
+            0
+        } else {
+            1
+        }
+    }
+
+    // Check if a .lnk file points to an existing .exe based on path matching
+    fn lnk_points_to_existing_exe(lnk_path: &str, lnk_name: &str, seen_exe_paths: &std::collections::HashSet<String>) -> bool {
+        let lnk_normalized = normalize_path(lnk_path);
+        let name_lower = lnk_name.to_lowercase();
+        
+        seen_exe_paths.iter().any(|exe_path| {
+            // Method 1: Extract directory structure from .lnk path and match with .exe path
+            if let Some(programs_idx) = lnk_normalized.find("/programs/") {
+                let after_programs = &lnk_normalized[programs_idx + "/programs/".len()..];
+                let product_part = after_programs.trim_end_matches(".lnk");
+                
+                // Extract company name (first directory after programs/)
+                if let Some(slash_idx) = product_part.find('/') {
+                    let company_dir = &product_part[..slash_idx];
+                    let product_name = &product_part[slash_idx + 1..];
+                    
+                    if exe_path.contains(company_dir) && exe_path.contains(product_name) {
+                        return true;
+                    }
+                } else {
+                    // Single-level: the product_part is the company/product name
+                    if exe_path.contains(product_part) && exe_path.contains(&name_lower) {
+                        return true;
+                    }
+                }
+            }
+            
+            // Method 2: Simple check - if .lnk name (lowercase) appears in .exe path
+            let name_words: Vec<&str> = name_lower.split_whitespace().collect();
+            if name_words.len() > 1 {
+                let significant_words: Vec<&str> = name_words.iter()
+                    .filter(|w| w.len() > 2)
+                    .copied()
+                    .collect();
+                if !significant_words.is_empty() {
+                    let all_words_match = significant_words.iter().all(|word| exe_path.contains(word));
+                    // Check for common directory patterns
+                    let has_common_dir = exe_path.contains("premiumsoft") || exe_path.contains("navicat");
+                    if all_words_match && has_common_dir {
+                        return true;
+                    }
+                }
+            }
+            
+            false
+        })
+    }
+
+    // Deduplicate apps by path and name, with special handling for Settings and Calculator
+    fn deduplicate_apps(mut apps: Vec<AppInfo>) -> Vec<AppInfo> {
+        // Remove duplicates based on path (more accurate than name)
+        apps.sort_by(|a, b| {
+            let a_is_ms_settings = a.path.starts_with("ms-settings:");
+            let b_is_ms_settings = b.path.starts_with("ms-settings:");
+            if a_is_ms_settings && !b_is_ms_settings {
+                std::cmp::Ordering::Greater
+            } else if !a_is_ms_settings && b_is_ms_settings {
+                std::cmp::Ordering::Less
+            } else {
+                a.path.cmp(&b.path)
+            }
+        });
+        apps.dedup_by(|a, b| {
+            if a.path == b.path {
+                return true;
+            }
+            // If both are Settings apps, keep shell:AppsFolder and remove ms-settings:
+            if a.name == "设置" && b.name == "设置" {
+                if a.path.starts_with("shell:AppsFolder") && b.path.starts_with("ms-settings:") {
+                    return true;
+                }
+                if b.path.starts_with("shell:AppsFolder") && a.path.starts_with("ms-settings:") {
+                    return true;
+                }
+            }
+            false
+        });
+
+        // Sort by name and priority
+        apps.sort_by(|a, b| {
+            let name_cmp = a.name.cmp(&b.name);
+            if name_cmp != std::cmp::Ordering::Equal {
+                return name_cmp;
+            }
+            let priority_cmp = app_priority(a).cmp(&app_priority(b));
+            if priority_cmp != std::cmp::Ordering::Equal {
+                return priority_cmp;
+            }
+            a.path.len().cmp(&b.path.len())
+        });
+        
+        // Deduplicate by name and target path
+        let mut deduplicated = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut seen_target_paths = std::collections::HashSet::new();
+        let mut settings_apps: Vec<AppInfo> = Vec::new();
+        let mut calculator_apps: Vec<AppInfo> = Vec::new();
+        
+        for app in apps {
+            let name_lower = app.name.to_lowercase();
+            
+            // Special handling for Settings and Calculator apps
+            // Use cached lowercase name to avoid repeated comparisons
+            let is_settings = name_lower == "设置" || name_lower == "settings" || 
+                             name_lower.contains("设置") || name_lower.contains("settings");
+            let is_calculator = name_lower == "计算器" || name_lower == "calculator" ||
+                                name_lower.contains("计算器") || name_lower.contains("calculator");
+            
+            if is_settings {
+                settings_apps.push(app);
+            } else if is_calculator {
+                calculator_apps.push(app);
+            } else {
+                // For other apps, check target path first
+                let app_path_lower = app.path.to_lowercase();
+                
+                let target_path_to_check = if !app_path_lower.ends_with(".lnk") {
+                    Some(normalize_path(&app.path))
+                } else {
+                    // For .lnk files, check if they point to an existing .exe
+                    if lnk_points_to_existing_exe(&app.path, &app.name, &seen_target_paths) {
+                        continue;
+                    }
+                    None
+                };
+                
+                // Skip if target path already seen
+                if let Some(ref target_path) = target_path_to_check {
+                    if seen_target_paths.contains(target_path) {
+                        continue;
+                    }
+                }
+                
+                // Skip if name already seen
+                if seen_names.contains(&name_lower) {
+                    continue;
+                }
+                
+                // Add the app
+                seen_names.insert(name_lower);
+                if let Some(target_path) = target_path_to_check {
+                    seen_target_paths.insert(target_path);
+                }
+                deduplicated.push(app);
+            }
+        }
+        
+        // Add Settings app(s) - prefer shell:AppsFolder, then ms-settings:
+        if !settings_apps.is_empty() {
+            settings_apps.sort_by(|a, b| {
+                settings_app_priority(&a.path).cmp(&settings_app_priority(&b.path))
+            });
+            deduplicated.push(settings_apps[0].clone());
+        } else {
+            // Add builtin Settings app
+            deduplicated.push(AppInfo {
+                name: "设置".to_string(),
+                path: "ms-settings:".to_string(),
+                icon: None,
+                description: Some("Windows 系统设置".to_string()),
+                name_pinyin: Some("shezhi".to_string()),
+                name_pinyin_initials: Some("sz".to_string()),
+            });
+        }
+        
+        // Add Calculator app(s) - prefer shell:AppsFolder
+        if !calculator_apps.is_empty() {
+            calculator_apps.sort_by(|a, b| {
+                calculator_app_priority(&a.path).cmp(&calculator_app_priority(&b.path))
+            });
+            deduplicated.push(calculator_apps[0].clone());
+        } else {
+            // Add builtin Calculator app
+            deduplicated.push(AppInfo {
+                name: "计算器".to_string(),
+                path: "shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".to_string(),
+                icon: None,
+                description: Some("Windows 计算器".to_string()),
+                name_pinyin: Some("jisuanqi".to_string()),
+                name_pinyin_initials: Some("jsq".to_string()),
+            });
+        }
+        
+        // Final filter: remove any WindowsApps paths
+        filter_windowsapps_paths(&mut deduplicated);
+        
+        deduplicated
+    }
+
     // Load cached apps from disk
     pub fn load_cache(app_data_dir: &Path) -> Result<Vec<AppInfo>, String> {
         let cache_file = get_cache_file_path(app_data_dir);
@@ -90,10 +343,7 @@ pub mod windows {
             .map_err(|e| format!("Failed to parse cache file: {}", e))?;
 
         // Filter out WindowsApps paths from cache (in case old cache contains them)
-        apps.retain(|app| {
-            let path_lower = app.path.to_lowercase();
-            !path_lower.contains("windowsapps")
-        });
+        filter_windowsapps_paths(&mut apps);
 
         Ok(apps)
     }
@@ -107,13 +357,8 @@ pub mod windows {
         }
 
         // Filter out WindowsApps paths before saving (double check)
-        let filtered_apps: Vec<AppInfo> = apps.iter()
-            .filter(|app| {
-                let path_lower = app.path.to_lowercase();
-                !path_lower.contains("windowsapps")
-            })
-            .cloned()
-            .collect();
+        let mut filtered_apps: Vec<AppInfo> = apps.to_vec();
+        filter_windowsapps_paths(&mut filtered_apps);
 
         let cache_file = get_cache_file_path(app_data_dir);
         let json_string = serde_json::to_string_pretty(&filtered_apps)
@@ -245,263 +490,7 @@ pub mod windows {
         crate::log!("AppScan", "开始去重处理 - 原始应用数: {}", apps_before_dedup);
         
         let dedup_start = std::time::Instant::now();
-
-        // Remove duplicates based on path (more accurate than name)
-        // But keep ms-settings: URI as fallback if shell:AppsFolder exists
-        apps.sort_by(|a, b| {
-            // Sort by path, but prioritize shell:AppsFolder over ms-settings:
-            let a_is_ms_settings = a.path.starts_with("ms-settings:");
-            let b_is_ms_settings = b.path.starts_with("ms-settings:");
-            if a_is_ms_settings && !b_is_ms_settings {
-                std::cmp::Ordering::Greater
-            } else if !a_is_ms_settings && b_is_ms_settings {
-                std::cmp::Ordering::Less
-            } else {
-                a.path.cmp(&b.path)
-            }
-        });
-        apps.dedup_by(|a, b| {
-            // Remove duplicates by path
-            if a.path == b.path {
-                return true;
-            }
-            // If both are Settings apps (same name), keep shell:AppsFolder and remove ms-settings:
-            if a.name == "设置" && b.name == "设置" {
-                if a.path.starts_with("shell:AppsFolder") && b.path.starts_with("ms-settings:") {
-                    return true; // Remove ms-settings: if shell:AppsFolder exists
-                }
-                if b.path.starts_with("shell:AppsFolder") && a.path.starts_with("ms-settings:") {
-                    return true; // Remove ms-settings: if shell:AppsFolder exists
-                }
-            }
-            false
-        });
-
-        // If still duplicates by name, keep the one with better launch target
-        // Prefer real executables/shortcuts (with icons) over shell:AppsFolder URIs
-        fn app_priority(app: &AppInfo) -> u8 {
-            let path = app.path.to_lowercase();
-            if path.ends_with(".exe") {
-                0
-            } else if path.ends_with(".lnk") {
-                1
-            } else if path.starts_with("shell:appsfolder") {
-                3
-            } else {
-                2
-            }
-        }
-
-        apps.sort_by(|a, b| {
-            let name_cmp = a.name.cmp(&b.name);
-            if name_cmp != std::cmp::Ordering::Equal {
-                return name_cmp;
-            }
-
-            let priority_cmp = app_priority(a).cmp(&app_priority(b));
-            if priority_cmp != std::cmp::Ordering::Equal {
-                return priority_cmp;
-            }
-
-            a.path.len().cmp(&b.path.len())
-        });
-        
-        // Deduplicate by name and target path (for .lnk files)
-        // Keep at least one Settings app (prefer shell:AppsFolder, then ms-settings:)
-        let mut deduplicated = Vec::new();
-        let mut seen_names = std::collections::HashSet::new();
-        let mut seen_target_paths = std::collections::HashSet::new(); // Track target paths to avoid duplicates
-        let mut settings_apps: Vec<AppInfo> = Vec::new();
-        let mut calculator_apps: Vec<AppInfo> = Vec::new();
-        
-        // Helper function to normalize path for comparison
-        let normalize_path = |path: &str| -> String {
-            path.to_lowercase().replace('\\', "/")
-        };
-        
-        for app in apps {
-            let name_lower = app.name.to_lowercase();
-            
-            // Special handling for Settings app - collect all variants
-            // Match both Chinese "设置" and English "Settings"
-            if name_lower == "设置" || name_lower == "settings" || 
-               name_lower.contains("设置") || name_lower.contains("settings") {
-                settings_apps.push(app);
-            } else if name_lower == "计算器" || name_lower == "calculator" ||
-                      name_lower.contains("计算器") || name_lower.contains("calculator") {
-                // Special handling for Calculator app
-                calculator_apps.push(app);
-            } else {
-                // For other apps, check target path first (especially for .lnk files)
-                let app_path_lower = app.path.to_lowercase();
-                
-                // For .exe files, normalize and check the path
-                // For .lnk files, use smart path matching to detect if they point to an existing .exe
-                let target_path_to_check = if !app_path_lower.ends_with(".lnk") {
-                    // Only normalize .exe paths
-                    Some(normalize_path(&app.path))
-                } else {
-                    // For .lnk files, use smart path matching to detect if they point to an existing .exe
-                    // This avoids slow PowerShell calls while still catching duplicates
-                    // Strategy: Extract key directory/product names from .lnk path and check if any .exe path contains them
-                    // Example: .exe: "c:/program files/premiumsoft/navicat premium 17/navicat.exe"
-                    //          .lnk: "c:/programdata/.../programs/premiumsoft/navicat premium 17.lnk"
-                    //          Both contain "premiumsoft" and "navicat premium 17"
-                    let lnk_normalized = normalize_path(&app.path);
-                    
-                    // Check if any existing .exe path shares the same key directory/product structure
-                    let name_lower_for_closure = name_lower.clone();
-                    let lnk_points_to_existing_exe = seen_target_paths.iter().any(|exe_path: &String| {
-                        // Method 1: Extract directory structure from .lnk path and match with .exe path
-                        if let Some(programs_idx) = lnk_normalized.find("/programs/") {
-                            let after_programs = &lnk_normalized[programs_idx + "/programs/".len()..];
-                            let product_part = after_programs.trim_end_matches(".lnk");
-                            
-                            // Extract company name (first directory after programs/)
-                            if let Some(slash_idx) = product_part.find('/') {
-                                let company_dir = &product_part[..slash_idx];
-                                let product_name = &product_part[slash_idx + 1..];
-                                
-                                if exe_path.contains(company_dir) && exe_path.contains(product_name) {
-                                    return true;
-                                }
-                            } else {
-                                // Single-level: the product_part is the company/product name
-                                let company_or_product = product_part;
-                                if exe_path.contains(company_or_product) {
-                                    let name_in_path = exe_path.contains(&name_lower_for_closure);
-                                    if name_in_path {
-                                        return true;
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Method 2: Simple check - if .lnk name (lowercase) appears in .exe path
-                        // This is a fallback for cases where path structure matching fails
-                        // For "Navicat Premium 17.lnk", check if .exe path contains "navicat premium 17"
-                        let name_words: Vec<&str> = name_lower_for_closure.split_whitespace().collect();
-                        if name_words.len() > 1 {
-                            // If name has multiple words, check if all significant words appear in .exe path
-                            let significant_words: Vec<&str> = name_words.iter()
-                                .filter(|w| w.len() > 2) // Filter out short words like "17"
-                                .copied()
-                                .collect();
-                            if !significant_words.is_empty() {
-                                let all_words_match = significant_words.iter().all(|word| exe_path.contains(word));
-                                // Also check if company/product directory name appears
-                                let has_common_dir = exe_path.contains("premiumsoft") || exe_path.contains("navicat");
-                                
-                                if all_words_match && has_common_dir {
-                                    return true;
-                                }
-                            }
-                        }
-                        
-                        false
-                    });
-                    
-                    if lnk_points_to_existing_exe {
-                        // This .lnk likely points to an existing .exe, skip it
-                        continue;
-                    }
-                    
-                    // Use .lnk path itself for tracking (prevents duplicate .lnk files)
-                    None
-                };
-                
-                // If target path is already seen (for .exe files), skip
-                if let Some(ref target_path) = target_path_to_check {
-                    if seen_target_paths.contains(target_path) {
-                        continue;
-                    }
-                }
-                
-                // Skip if name already seen (name-based deduplication)
-                if seen_names.contains(&name_lower) {
-                    continue;
-                }
-                
-                // Add the app
-                seen_names.insert(name_lower.clone());
-                if let Some(target_path) = target_path_to_check {
-                    seen_target_paths.insert(target_path);
-                }
-                deduplicated.push(app);
-            }
-        }
-        
-        // Add Settings app(s) - prefer shell:AppsFolder, then ms-settings:
-        // IMPORTANT: Always add at least one Settings app (from builtin if UWP scan didn't find it)
-        if !settings_apps.is_empty() {
-            // Sort settings apps by priority
-            settings_apps.sort_by(|a, b| {
-                let a_priority = if a.path.starts_with("shell:AppsFolder") { 0 } 
-                    else if a.path.starts_with("ms-settings:") { 1 } 
-                    else { 2 };
-                let b_priority = if b.path.starts_with("shell:AppsFolder") { 0 } 
-                    else if b.path.starts_with("ms-settings:") { 1 } 
-                    else { 2 };
-                a_priority.cmp(&b_priority)
-            });
-            
-            // Add the first (best) Settings app
-            let selected_settings = settings_apps[0].clone();
-            deduplicated.push(selected_settings);
-        } else {
-            // UWP scan didn't find Settings, add builtin one
-            let builtin_settings = AppInfo {
-                name: "设置".to_string(),
-                path: "ms-settings:".to_string(),
-                icon: None,
-                description: Some("Windows 系统设置".to_string()),
-                name_pinyin: Some("shezhi".to_string()),
-                name_pinyin_initials: Some("sz".to_string()),
-            };
-            deduplicated.push(builtin_settings);
-        }
-        seen_names.insert("设置".to_string());
-        seen_names.insert("settings".to_string());
-        
-        // Add Calculator app(s) - prefer shell:AppsFolder
-        // IMPORTANT: Always add at least one Calculator app (from builtin if UWP scan didn't find it)
-        if !calculator_apps.is_empty() {
-            // Sort calculator apps by priority (prefer shell:AppsFolder)
-            calculator_apps.sort_by(|a, b| {
-                let a_priority = if a.path.starts_with("shell:AppsFolder") { 0 } else { 1 };
-                let b_priority = if b.path.starts_with("shell:AppsFolder") { 0 } else { 1 };
-                a_priority.cmp(&b_priority)
-            });
-            
-            // Add the first (best) Calculator app
-            let selected_calculator = calculator_apps[0].clone();
-            deduplicated.push(selected_calculator);
-        } else {
-            // UWP scan didn't find Calculator, add builtin one
-            let builtin_calculator = AppInfo {
-                name: "计算器".to_string(),
-                path: "shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".to_string(),
-                icon: None,
-                description: Some("Windows 计算器".to_string()),
-                name_pinyin: Some("jisuanqi".to_string()),
-                name_pinyin_initials: Some("jsq".to_string()),
-            };
-            deduplicated.push(builtin_calculator);
-        }
-        seen_names.insert("计算器".to_string());
-        seen_names.insert("calculator".to_string());
-        
-        apps = deduplicated;
-        
-        // Final filter: remove any WindowsApps paths (final safety check)
-        let initial_count = apps.len();
-        apps.retain(|app| {
-            let path_lower = app.path.to_lowercase();
-            !path_lower.contains("windowsapps")
-        });
-        let filtered_count = apps.len();
-        // Filtered out WindowsApps entries
-        
+        apps = deduplicate_apps(apps);
         let apps_after_dedup = apps.len();
         let dedup_duration = dedup_start.elapsed();
         let removed_count = apps_before_dedup - apps_after_dedup;
@@ -535,8 +524,8 @@ pub mod windows {
     /// 用于在搜索时实时发现新应用
     pub fn scan_specific_path(path: &Path) -> Result<Vec<AppInfo>, String> {
         // Skip WindowsApps directory
-        let path_str = path.to_string_lossy().to_lowercase();
-        if path_str.contains("windowsapps") {
+        let path_str = path.to_string_lossy();
+        if is_windowsapps_path(&path_str) {
             return Ok(Vec::new());
         }
 
@@ -989,15 +978,14 @@ pub mod windows {
         }
 
         // Limit total number of apps to avoid memory issues (increased to 2000)
-        const MAX_APPS: usize = 2000;
         if apps.len() >= MAX_APPS {
             return Ok(());
         }
 
         // Skip WindowsApps directory - UWP apps should be scanned via Get-StartApps instead
         // Skip Recent directory - contains temporary shortcuts that often get deleted
-        let dir_str = dir.to_string_lossy().to_lowercase();
-        if dir_str.contains("windowsapps") || dir_str.contains("\\recent") || dir_str.contains("/recent") {
+        let dir_str = dir.to_string_lossy();
+        if is_windowsapps_path(&dir_str) || is_recent_path(&dir_str) {
             return Ok(());
         }
 
@@ -1018,8 +1006,8 @@ pub mod windows {
             let path = entry.path();
 
             // Skip files in WindowsApps and Recent directories
-            let path_str = path.to_string_lossy().to_lowercase();
-            if path_str.contains("windowsapps") || path_str.contains("\\recent\\") || path_str.contains("/recent/") {
+            let path_str = path.to_string_lossy();
+            if is_windowsapps_path(&path_str) || is_recent_path(&path_str) {
                 continue;
             }
 
@@ -1028,60 +1016,35 @@ pub mod windows {
                 if let Err(_) = scan_directory(&path, apps, depth + 1) {
                     // Continue on error
                 }
-            } else if path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                == Some("lnk".to_string())
-            {
-                // Fast path: use .lnk filename directly without parsing
-                // Don't extract icon during scan to keep it fast - extract in background later
-                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    let name_str = name.to_string();
-                    // Pre-compute pinyin for faster search (only for Chinese names)
-                    let (name_pinyin, name_pinyin_initials) = if contains_chinese(&name_str) {
-                        (
-                            Some(to_pinyin(&name_str).to_lowercase()),
-                            Some(to_pinyin_initials(&name_str).to_lowercase()),
-                        )
-                    } else {
-                        (None, None)
-                    };
-                    apps.push(AppInfo {
-                        name: name_str,
-                        path: path.to_string_lossy().to_string(),
-                        icon: None, // Will be extracted in background
-                        description: None,
-                        name_pinyin,
-                        name_pinyin_initials,
-                    });
-                }
-            } else if path
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                == Some("exe".to_string())
-            {
-                // Direct executable - don't extract icon during scan to keep it fast
-                if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                    let name_str = name.to_string();
-                    // Pre-compute pinyin for faster search (only for Chinese names)
-                    let (name_pinyin, name_pinyin_initials) = if contains_chinese(&name_str) {
-                        (
-                            Some(to_pinyin(&name_str).to_lowercase()),
-                            Some(to_pinyin_initials(&name_str).to_lowercase()),
-                        )
-                    } else {
-                        (None, None)
-                    };
-                    apps.push(AppInfo {
-                        name: name_str,
-                        path: path.to_string_lossy().to_string(),
-                        icon: None, // Will be extracted in background
-                        description: None,
-                        name_pinyin,
-                        name_pinyin_initials,
-                    });
+            } else {
+                // Check if it's a .lnk or .exe file
+                let ext = path.extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase());
+                
+                if ext == Some("lnk".to_string()) || ext == Some("exe".to_string()) {
+                    // Fast path: use filename directly without parsing
+                    // Don't extract icon during scan to keep it fast - extract in background later
+                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
+                        let name_str = name.to_string();
+                        // Pre-compute pinyin for faster search (only for Chinese names)
+                        let (name_pinyin, name_pinyin_initials) = if contains_chinese(&name_str) {
+                            (
+                                Some(to_pinyin(&name_str).to_lowercase()),
+                                Some(to_pinyin_initials(&name_str).to_lowercase()),
+                            )
+                        } else {
+                            (None, None)
+                        };
+                        apps.push(AppInfo {
+                            name: name_str,
+                            path: path.to_string_lossy().to_string(),
+                            icon: None, // Will be extracted in background
+                            description: None,
+                            name_pinyin,
+                            name_pinyin_initials,
+                        });
+                    }
                 }
             }
         }
@@ -1157,8 +1120,8 @@ pub mod windows {
                     }
                 };
                 
-                // 定义图标尺寸（32x32）
-                let size = ::windows::Win32::Foundation::SIZE { cx: 32, cy: 32 };
+                // 定义图标尺寸
+                let size = ::windows::Win32::Foundation::SIZE { cx: ICON_SIZE as i32, cy: ICON_SIZE as i32 };
                 
                 // 尝试不同的标志组合
                 // 先尝试：只要图标，允许更大尺寸
@@ -1282,7 +1245,7 @@ pub mod windows {
         };
 
         unsafe {
-            let icon_size = 32;
+            let icon_size = ICON_SIZE;
             
             // 获取屏幕 DC
             let hdc_screen = GetDC(0);
@@ -1441,8 +1404,8 @@ pub mod windows {
             {
                 let mut encoder = png::Encoder::new(
                     std::io::Cursor::new(&mut png_data),
-                    32,
-                    32,
+                    icon_size,
+                    icon_size,
                 );
                 encoder.set_color(png::ColorType::Rgba);
                 encoder.set_depth(png::BitDepth::Eight);
@@ -2409,8 +2372,8 @@ try {
         use windows_sys::Win32::UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL};
 
         unsafe {
-            // 获取图标尺寸（通常为 32x32 或系统默认）
-            let icon_size = 32;
+            // 获取图标尺寸
+            let icon_size = ICON_SIZE;
             
             // 创建兼容的 DC
             let hdc_screen = GetDC(0);
@@ -2475,13 +2438,14 @@ try {
             }
 
             // 绘制图标到位图
+            let icon_size_i32 = icon_size as i32;
             let draw_result = DrawIconEx(
                 hdc,
                 0,
                 0,
                 icon_handle,
-                icon_size,
-                icon_size,
+                icon_size_i32,
+                icon_size_i32,
                 0,
                 0, // 可选的图标句柄，NULL 时使用 0
                 DI_NORMAL,
@@ -2490,9 +2454,9 @@ try {
             // 读取位图数据
             let mut bitmap = BITMAP {
                 bmType: 0,
-                bmWidth: icon_size,
-                bmHeight: icon_size,
-                bmWidthBytes: icon_size * 4, // 32位 = 4字节每像素
+                bmWidth: icon_size_i32,
+                bmHeight: icon_size_i32,
+                bmWidthBytes: (icon_size * 4) as i32, // 32位 = 4字节每像素
                 bmPlanes: 1,
                 bmBitsPixel: 32,
                 bmBits: std::ptr::null_mut(),
@@ -3460,54 +3424,32 @@ public class IconExtractor {
     }
 
     pub fn search_apps(query: &str, apps: &[AppInfo]) -> Vec<AppInfo> {
-        let total_start = std::time::Instant::now();
-        
         if query.is_empty() {
             return apps.iter().take(10).cloned().collect();
         }
 
-        let query_lower_start = std::time::Instant::now();
         let query_lower = query.to_lowercase();
         let query_is_pinyin = !contains_chinese(&query_lower);
-        let query_lower_duration = query_lower_start.elapsed();
 
         // Pre-allocate with capacity estimate to reduce allocations
-        let mut results: Vec<(usize, i32)> = Vec::with_capacity(20);
+        let mut results: Vec<(usize, i32)> = Vec::with_capacity(MAX_SEARCH_RESULTS);
         
         // Track perfect matches for early exit optimization
         let mut perfect_matches = 0;
-        const MAX_PERFECT_MATCHES: usize = 3; // Early exit if we find 3 perfect matches (reduced from 5 for faster response)
-        
-        // Check all apps to ensure we find matches regardless of their position in the list
-        // Early exit optimization is still in place for perfect matches to maintain performance
-
-        let loop_start = std::time::Instant::now();
-        let mut name_lower_count = 0;
-        let mut path_lower_count = 0;
-        let mut apps_checked = 0;
         
         // Use indices instead of cloning to avoid expensive clones
         for (idx, app) in apps.iter().enumerate() {
-            apps_checked += 1;
             let mut score = 0;
 
             // Direct text match (highest priority) - use case-insensitive comparison
             // Optimize: compute to_lowercase once per app name
-            let name_lower_start = std::time::Instant::now();
             let name_lower = app.name.to_lowercase();
-            name_lower_count += 1;
             
             if name_lower == query_lower {
                 score += 1000;
                 perfect_matches += 1;
                 results.push((idx, score));
-                // For short queries (like "qq"), continue searching but we'll prioritize perfect matches
-                // Don't break early - we want to find all perfect matches first
-                // Early exit only if we have enough perfect matches (reduced threshold for faster response)
                 if perfect_matches >= MAX_PERFECT_MATCHES {
-                    // If we have enough perfect matches, we can stop searching for more
-                    // But we've already added this one, so continue to check if there are more perfect matches
-                    // Actually, let's break here to avoid searching too many apps
                     break;
                 }
             } else if name_lower.starts_with(&query_lower) {
@@ -3546,7 +3488,6 @@ public class IconExtractor {
                         score += 120;
                     }
                 }
-                // If no cached pinyin, skip pinyin matching (app name likely doesn't contain Chinese)
             }
 
             // Description match (check if query matches description, e.g., "系统设置" matches "Windows 系统设置")
@@ -3560,12 +3501,9 @@ public class IconExtractor {
             }
             
             // Path match gets lower score (only check if no name or description match to save time)
-            if score == 0 {
-                let path_lower_start = std::time::Instant::now();
-                let path_lower = app.path.to_lowercase();
-                path_lower_count += 1;
-                let _path_lower_duration = path_lower_start.elapsed();
-                if path_lower.contains(&query_lower) {
+            // Use case-insensitive comparison without allocating new string
+            if score == 0 && app.path.len() >= query.len() {
+                if app.path.to_lowercase().contains(&query_lower) {
                     score += 10;
                 }
             }
@@ -3574,10 +3512,8 @@ public class IconExtractor {
                 results.push((idx, score));
             }
         }
-        let loop_duration = loop_start.elapsed();
 
         // If we have perfect matches and early exited, return them immediately without sorting
-        let clone_start = std::time::Instant::now();
         let final_results: Vec<AppInfo> = if perfect_matches >= MAX_PERFECT_MATCHES && results.len() <= MAX_PERFECT_MATCHES {
             results
                 .into_iter()
@@ -3585,21 +3521,16 @@ public class IconExtractor {
                 .collect()
         } else {
             // Sort by score (descending) only if we need to
-            let sort_start = std::time::Instant::now();
             results.sort_by(|a, b| b.1.cmp(&a.1));
-            let _sort_duration = sort_start.elapsed();
 
-            // Limit to top 20 results for performance, clone only the selected apps
+            // Limit to top results for performance, clone only the selected apps
             results
                 .into_iter()
-                .take(20)
+                .take(MAX_SEARCH_RESULTS)
                 .map(|(idx, _)| apps[idx].clone())
                 .collect()
         };
-        let clone_duration = clone_start.elapsed();
         
-        // 性能日志已移除，避免 println! I/O 开销影响性能
-        // 如果需要调试，可以临时启用
         final_results
     }
 

@@ -8,8 +8,12 @@ import { LogicalSize } from "@tauri-apps/api/window";
 import { plugins, executePlugin } from "../plugins";
 import { AppCenterContent } from "./AppCenterContent";
 import { MemoModal } from "./MemoModal";
+import { RemarkEditModal } from "./RemarkEditModal";
+import { PluginListModal } from "./PluginListModal";
 import { ContextMenu } from "./ContextMenu";
 import { ErrorDialog } from "./ErrorDialog";
+import { SearchInputHeader } from "./SearchInputHeader";
+import { SearchResultArea } from "./SearchResultArea";
 import { LauncherStatusBar } from "./LauncherStatusBar";
 import { ResultList } from "./ResultList";
 import { getLayoutConfig, type ResultStyle } from "../utils/themeConfig";
@@ -33,6 +37,7 @@ import { useAppIconsListener } from "../hooks/useAppIconsListener";
 import { useSearchWrappers } from "../hooks/useSearchWrappers";
 import { useCombinedResults } from "../hooks/useCombinedResults";
 import { useSearch } from "../hooks/useSearch";
+import { useScrollbarStyle } from "../hooks/useScrollbarStyle";
 import {
   processPastedPath as processPastedPathUtil,
   handlePaste as handlePasteUtil,
@@ -194,211 +199,8 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
 
   // 注意：组件卸载时清理 Everything 搜索会话的 useEffect 在 closeSessionSafe 定义之后
 
-  // 动态注入滚动条样式，确保样式生效（随风格变化）
-  // 注意：Windows 11 可能使用系统原生滚动条，webkit-scrollbar 样式可能不生效
-  useEffect(() => {
-    const styleId = 'custom-scrollbar-style';
-    const config = (() => {
-      if (resultStyle === "soft") {
-        return {
-          scrollbarSize: 12,
-          trackBg: "linear-gradient(to bottom, rgba(245, 247, 250, 0.8), rgba(250, 251, 253, 0.9))",
-          trackBorder: "rgba(226, 232, 240, 0.9)",
-          thumbBg: "linear-gradient(to bottom, rgba(148, 163, 184, 0.7), rgba(100, 116, 139, 0.8))",
-          thumbHover: "linear-gradient(to bottom, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.95))",
-          thumbActive: "linear-gradient(to bottom, rgba(71, 85, 105, 0.95), rgba(51, 65, 85, 1))",
-          thumbBorder: 2.5,
-          thumbBorderBg: "rgba(255, 255, 255, 0.95)",
-          thumbHoverBorder: "rgba(255, 255, 255, 1)",
-          thumbActiveBorder: "rgba(255, 255, 255, 1)",
-          minHeight: 40,
-          thumbShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-          thumbHoverShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
-        };
-      }
-      if (resultStyle === "skeuomorphic") {
-        return {
-          scrollbarSize: 12,
-          trackBg: "linear-gradient(to bottom, rgba(246, 248, 251, 0.8), rgba(249, 251, 254, 0.95))",
-          trackBorder: "rgba(227, 233, 241, 0.95)",
-          thumbBg: "linear-gradient(to bottom, rgba(197, 208, 222, 0.75), rgba(178, 193, 214, 0.85))",
-          thumbHover: "linear-gradient(to bottom, rgba(178, 193, 214, 0.9), rgba(159, 176, 201, 0.98))",
-          thumbActive: "linear-gradient(to bottom, rgba(159, 176, 201, 0.98), rgba(139, 158, 186, 1))",
-          thumbBorder: 2.5,
-          thumbBorderBg: "rgba(249, 251, 254, 0.98)",
-          thumbHoverBorder: "rgba(238, 243, 250, 1)",
-          thumbActiveBorder: "rgba(227, 233, 243, 1)",
-          minHeight: 40,
-          thumbShadow: "0 2px 8px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.6)",
-          thumbHoverShadow: "0 4px 12px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7)",
-        };
-      }
-      return {
-        scrollbarSize: 12,
-        trackBg: "linear-gradient(to bottom, rgba(248, 250, 252, 0.8), rgba(251, 252, 254, 0.9))",
-        trackBorder: "rgba(226, 232, 240, 0.9)",
-        thumbBg: "linear-gradient(to bottom, rgba(148, 163, 184, 0.7), rgba(100, 116, 139, 0.8))",
-        thumbHover: "linear-gradient(to bottom, rgba(100, 116, 139, 0.9), rgba(71, 85, 105, 0.95))",
-        thumbActive: "linear-gradient(to bottom, rgba(71, 85, 105, 0.95), rgba(51, 65, 85, 1))",
-        thumbBorder: 2.5,
-        thumbBorderBg: "rgba(255, 255, 255, 0.95)",
-        thumbHoverBorder: "rgba(255, 255, 255, 1)",
-        thumbActiveBorder: "rgba(255, 255, 255, 1)",
-        minHeight: 40,
-        thumbShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-        thumbHoverShadow: "0 4px 12px rgba(0, 0, 0, 0.15)",
-      };
-    })();
-    
-    const injectStyle = () => {
-      // 如果样式已存在，先移除
-      const existingStyle = document.getElementById(styleId);
-      if (existingStyle) {
-        existingStyle.remove();
-      }
-      
-      // 创建新的 style 标签
-      const style = document.createElement('style');
-      style.id = styleId;
-      style.textContent = `
-        .results-list-scroll {
-          overflow-y: auto !important;
-          scrollbar-width: thin !important;
-          scrollbar-color: rgba(148, 163, 184, 0.8) rgba(248, 250, 252, 0.8) !important;
-        }
-        
-        .results-list-scroll::-webkit-scrollbar {
-          width: ${config.scrollbarSize}px !important;
-          height: ${config.scrollbarSize}px !important;
-          display: block !important;
-          -webkit-appearance: none !important;
-          background: transparent !important;
-        }
-        
-        .results-list-scroll::-webkit-scrollbar-button {
-          display: none !important;
-          width: 0 !important;
-          height: 0 !important;
-        }
-        
-        .results-list-scroll::-webkit-scrollbar-track {
-          background: ${config.trackBg} !important;
-          border-left: 1px solid ${config.trackBorder} !important;
-          border-radius: 12px !important;
-          margin: 6px 2px !important;
-          opacity: 1 !important;
-        }
-        
-        .results-list-scroll::-webkit-scrollbar-thumb {
-          background: ${config.thumbBg} !important;
-          border-radius: 12px !important;
-          border: ${config.thumbBorder}px solid ${config.thumbBorderBg} !important;
-          background-clip: padding-box !important;
-          min-height: ${config.minHeight}px !important;
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-          box-shadow: ${config.thumbShadow} !important;
-          opacity: 1 !important;
-          visibility: visible !important;
-        }
-        
-        .results-list-scroll::-webkit-scrollbar-thumb:hover {
-          background: ${config.thumbHover} !important;
-          border: ${config.thumbBorder}px solid ${config.thumbHoverBorder} !important;
-          box-shadow: ${config.thumbHoverShadow} !important;
-        }
-        
-        .results-list-scroll::-webkit-scrollbar-thumb:active {
-          background: ${config.thumbActive} !important;
-          border: ${config.thumbBorder}px solid ${config.thumbActiveBorder} !important;
-          box-shadow: ${config.thumbHoverShadow} !important;
-        }
-        
-        /* 可执行文件横向滚动条的滚动条样式 */
-        .executable-scroll-container {
-          overflow-x: auto !important;
-          scrollbar-width: thin !important;
-          scrollbar-color: rgba(148, 163, 184, 0.8) rgba(248, 250, 252, 0.8) !important;
-        }
-        
-        .executable-scroll-container::-webkit-scrollbar {
-          height: ${config.scrollbarSize}px !important;
-          width: ${config.scrollbarSize}px !important;
-          display: block !important;
-          -webkit-appearance: none !important;
-          background: transparent !important;
-        }
-        
-        .executable-scroll-container::-webkit-scrollbar-button {
-          display: none !important;
-          width: 0 !important;
-          height: 0 !important;
-        }
-        
-        .executable-scroll-container::-webkit-scrollbar-track {
-          background: ${config.trackBg} !important;
-          border-top: 1px solid ${config.trackBorder} !important;
-          border-radius: 12px !important;
-          margin: 2px 6px !important;
-          opacity: 1 !important;
-        }
-        
-        .executable-scroll-container::-webkit-scrollbar-thumb {
-          background: ${config.thumbBg} !important;
-          border-radius: 12px !important;
-          border: ${config.thumbBorder}px solid ${config.thumbBorderBg} !important;
-          background-clip: padding-box !important;
-          min-width: ${config.minHeight}px !important;
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-          box-shadow: ${config.thumbShadow} !important;
-          opacity: 1 !important;
-          visibility: visible !important;
-        }
-        
-        .executable-scroll-container::-webkit-scrollbar-thumb:hover {
-          background: ${config.thumbHover} !important;
-          border: ${config.thumbBorder}px solid ${config.thumbHoverBorder} !important;
-          box-shadow: ${config.thumbHoverShadow} !important;
-        }
-        
-        .executable-scroll-container::-webkit-scrollbar-thumb:active {
-          background: ${config.thumbActive} !important;
-          border: ${config.thumbBorder}px solid ${config.thumbActiveBorder} !important;
-          box-shadow: ${config.thumbHoverShadow} !important;
-        }
-      `;
-      document.head.appendChild(style);
-    };
-    
-    // 立即注入样式
-    injectStyle();
-    
-    // 延迟再次注入，确保在元素渲染后也能应用
-    const timeoutId = setTimeout(() => {
-      injectStyle();
-    }, 100);
-    
-    // 监听 DOM 变化，当滚动容器出现时再次注入
-    const observer = new MutationObserver(() => {
-      if (document.querySelector('.results-list-scroll')) {
-        injectStyle();
-      }
-    });
-    
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-    
-    return () => {
-      clearTimeout(timeoutId);
-      observer.disconnect();
-      // 清理：组件卸载时移除样式
-      const styleToRemove = document.getElementById(styleId);
-      if (styleToRemove) {
-        styleToRemove.remove();
-      }
-    };
-  }, [resultStyle]);
+  // 动态注入滚动条样式
+  useScrollbarStyle(resultStyle);
 
   // 重置备忘录相关状态的辅助函数
   const resetMemoState = useCallback(() => {
@@ -779,18 +581,6 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
 
 
   const layout = useMemo(() => getLayoutConfig(resultStyle), [resultStyle]);
-  
-  // 缓存输入框的 className 和 style，避免每次渲染都创建新对象
-  const inputClassName = useMemo(() => {
-    return `w-full bg-transparent border-none outline-none p-0 text-lg ${layout.input.split(' ').filter(c => c.includes('placeholder') || c.includes('text-')).join(' ') || 'placeholder-gray-400 text-gray-700'}`;
-  }, [layout.input]);
-  
-  const inputStyle = useMemo(() => ({
-    cursor: 'text' as const,
-    height: 'auto' as const,
-    lineHeight: '1.5',
-    minHeight: '1.5em'
-  }), []);
 
   // Call Ollama API to ask AI (流式请求)
   const askOllamaWrapper = useCallback(async (prompt: string) => {
@@ -1847,6 +1637,40 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
     ]
   );
 
+  const handlePluginClick = useCallback(async (pluginId: string) => {
+    const pluginContext: PluginContext = {
+      query,
+      setQuery,
+      setSelectedIndex,
+      hideLauncher: async () => {
+        await tauriApi.hideLauncher();
+      },
+      setIsMemoModalOpen,
+      setIsMemoListMode,
+      setSelectedMemo,
+      setMemoEditTitle,
+      setMemoEditContent,
+      setMemos,
+      tauriApi,
+    };
+    await executePlugin(pluginId, pluginContext);
+    setIsPluginListModalOpen(false);
+    setTimeout(() => {
+      hideLauncherAndResetState();
+    }, 100);
+  }, [
+    query,
+    setQuery,
+    setSelectedIndex,
+    setIsMemoModalOpen,
+    setIsMemoListMode,
+    setSelectedMemo,
+    setMemoEditTitle,
+    setMemoEditContent,
+    setMemos,
+    hideLauncherAndResetState,
+  ]);
+
   return (
     <div 
       className="flex flex-col w-full items-center justify-start"
@@ -1905,447 +1729,59 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
           style={{ minHeight: '200px', width: `${windowWidth}px` }}
         >
           {/* Search Box */}
-          <div 
-            className={`${layout.header} select-none`}
-            onMouseDown={async (e) => {
-              // 手动触发拖拽，移除 data-tauri-drag-region 避免冲突
-              // 排除输入框、应用中心按钮和 footer 区域的按钮
-              // 注意：wrapper 区域会 stopPropagation，所以这里主要处理 wrapper 上方的区域
-              const target = e.target as HTMLElement;
-              const isInput = target.tagName === 'INPUT' || target.closest('input');
-              const isAppCenterButton = target.closest('[title="应用中心"]');
-              const isFooterButton = target.closest('button') && target.closest('[class*="border-t"]');
-              const isButton = target.tagName === 'BUTTON' || target.closest('button');
-              if (!isInput && !isAppCenterButton && !isFooterButton && !isButton) {
-                // 使用和 wrapper 相同的可靠逻辑：先阻止默认行为和冒泡，再调用拖拽
-                e.preventDefault();
-                e.stopPropagation();
-                await startWindowDragging();
-              }
+          <SearchInputHeader
+            layout={layout}
+            inputRef={inputRef}
+            query={query}
+            setQuery={setQuery}
+            handleKeyDown={handleKeyDown}
+            handlePaste={handlePaste}
+            pastedImageDataUrl={pastedImageDataUrl}
+            isHoveringAiIcon={isHoveringAiIcon}
+            setIsHoveringAiIcon={setIsHoveringAiIcon}
+            onPluginListClick={async () => {
+              await tauriApi.showPluginListWindow();
+              await hideLauncherAndResetState();
             }}
-          >
-            <div className="flex items-center gap-3 select-none h-full">
-              {/* 拖拽手柄图标 */}
-              <svg
-                className={layout.dragHandleIcon}
-                fill="currentColor"
-                viewBox="0 0 24 24"
-                style={{ pointerEvents: 'none' }}
-              >
-                <circle cx="9" cy="5" r="1.5" />
-                <circle cx="15" cy="5" r="1.5" />
-                <circle cx="9" cy="12" r="1.5" />
-                <circle cx="15" cy="12" r="1.5" />
-                <circle cx="9" cy="19" r="1.5" />
-                <circle cx="15" cy="19" r="1.5" />
-              </svg>
-              <svg
-                className={layout.searchIcon}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                style={{ pointerEvents: 'none' }}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                />
-              </svg>
-              {/* 输入框包裹层 - 负责占位和拖拽，缩小 input 的实际点击区域 */}
-              <div 
-                className="flex-1 flex select-none" 
-                style={{ 
-                  userSelect: 'none', 
-                  WebkitUserSelect: 'none',
-                  height: '100%',
-                  alignItems: 'center',
-                  gap: '8px'
-                }}
-                onMouseDown={async (e) => {
-                  // 如果点击的不是输入框，触发拖拽（这个逻辑是可靠的，从不失效）
-                  const target = e.target as HTMLElement;
-                  const isInput = target.tagName === 'INPUT' || target.closest('input');
-                  const isImage = target.tagName === 'IMG' || target.closest('img');
-                  if (!isInput && !isImage) {
-                    // 阻止事件冒泡，避免 header 重复处理
-                    e.stopPropagation();
-                    e.preventDefault();
-                    await startWindowDragging();
-                  }
-                  // 如果是输入框，不阻止冒泡，让输入框自己处理
-                }}
-              >
-                {/* 粘贴图片预览 */}
-                {pastedImageDataUrl && (
-                  <img
-                    src={pastedImageDataUrl}
-                    alt="粘贴的图片"
-                    className="w-8 h-8 object-cover rounded border border-gray-300 flex-shrink-0"
-                    style={{ imageRendering: 'auto' }}
-                    onError={(e) => {
-                      // 如果图片加载失败，隐藏预览
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                    }}
-                  />
-                )}
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={query}
-                  onChange={(e) => {
-                    // 参考搜索插件输入框的简单实现，直接更新状态
-                    // React 的受控组件本身就能很好地处理输入法组合输入，不需要额外的干预
-                    setQuery(e.target.value);
-                  }}
-                  onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
-                  placeholder="输入应用名称或粘贴文件路径..."
-                  className={inputClassName}
-                  style={inputStyle}
-                  autoFocus
-                  onFocus={(e) => {
-                    // Ensure input is focused, but don't select text if user is typing
-                    e.target.focus();
-                  }}
-                  onMouseDown={(e) => {
-                    // 阻止事件冒泡，防止触发窗口拖拽
-                    // 输入框内应该只处理输入和文本选择，不应该触发窗口拖拽
-                    e.stopPropagation();
-                    // Close context menu when clicking on search input
-                    if (contextMenu) {
-                      setContextMenu(null);
-                    }
-                  }}
-                  onClick={(e) => {
-                    // 点击输入框时，确保焦点正确，阻止事件冒泡避免触发其他操作
-                    e.stopPropagation();
-                  }}
-                />
-              </div>
-              {/* 应用中心按钮 */}
-              <div
-                className="relative flex items-center justify-center"
-                onMouseEnter={() => setIsHoveringAiIcon(true)}
-                onMouseLeave={() => setIsHoveringAiIcon(false)}
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  await tauriApi.showPluginListWindow();
-                  await hideLauncherAndResetState();
-                }}
-                onMouseDown={(e) => {
-                  // 阻止拖拽，让按钮可以正常点击
-                  e.stopPropagation();
-                }}
-                style={{ cursor: 'pointer', minWidth: '24px', minHeight: '24px' }}
-                title="应用中心"
-              >
-                <svg
-                  className={layout.pluginIcon(isHoveringAiIcon)}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  {/* 应用中心/插件图标 */}
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-                  />
-                </svg>
-              </div>
-            </div>
-          </div>
+            onStartWindowDragging={startWindowDragging}
+            contextMenu={contextMenu}
+            setContextMenu={setContextMenu}
+          />
 
           {/* Results List or AI Answer */}
-          <div className="flex-1 flex flex-col min-h-0">
-          {showAiAnswer ? (
-            // AI 回答模式
-            <div className="flex-1 overflow-y-auto min-h-0" style={{ maxHeight: '500px' }}>
-              <div className="px-6 py-4">
-                {isAiLoading && !aiAnswer ? (
-                  // 只在完全没有内容时显示加载状态
-                  <div className="flex items-center justify-center py-12">
-                    <div className="flex flex-col items-center gap-3">
-                      <svg
-                        className="w-8 h-8 text-blue-500 animate-spin"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                        />
-                      </svg>
-                      <div className="text-gray-600">AI 正在思考中...</div>
-                    </div>
-                  </div>
-                ) : aiAnswer ? (
-                  // 显示 AI 回答（包括流式接收中的内容）
-                  <div className="bg-white rounded-lg border border-gray-200 p-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <svg
-                          className="w-5 h-5 text-blue-500"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                          />
-                          <circle cx="9" cy="9" r="1" fill="currentColor"/>
-                          <circle cx="15" cy="9" r="1" fill="currentColor"/>
-                        </svg>
-                        <h3 className="text-lg font-semibold text-gray-800">AI 回答</h3>
-                        {isAiLoading && (
-                          <svg
-                            className="w-4 h-4 text-blue-500 animate-spin ml-2"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                            />
-                          </svg>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => {
-                          setShowAiAnswer(false);
-                          setAiAnswer(null);
-                        }}
-                        className="text-gray-400 hover:text-gray-600 transition-colors"
-                        title="返回搜索结果"
-                      >
-                        <svg
-                          className="w-5 h-5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                    <div className="text-gray-700 break-words leading-relaxed prose prose-sm max-w-none">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          // 自定义样式
-                          p: ({ children }: any) => <p className="mb-3 last:mb-0">{children}</p>,
-                          h1: ({ children }: any) => <h1 className="text-2xl font-bold mb-3 mt-4 first:mt-0">{children}</h1>,
-                          h2: ({ children }: any) => <h2 className="text-xl font-bold mb-2 mt-4 first:mt-0">{children}</h2>,
-                          h3: ({ children }: any) => <h3 className="text-lg font-semibold mb-2 mt-3 first:mt-0">{children}</h3>,
-                          ul: ({ children }: any) => <ul className="list-disc list-inside mb-3 space-y-1">{children}</ul>,
-                          ol: ({ children }: any) => <ol className="list-decimal list-inside mb-3 space-y-1">{children}</ol>,
-                          li: ({ children }: any) => <li className="ml-2">{children}</li>,
-                          code: ({ inline, children }: any) => 
-                            inline ? (
-                              <code className="bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>
-                            ) : (
-                              <code className="block bg-gray-100 p-3 rounded text-sm font-mono overflow-x-auto mb-3">{children}</code>
-                            ),
-                          pre: ({ children }: any) => <pre className="mb-3">{children}</pre>,
-                          blockquote: ({ children }: any) => (
-                            <blockquote className="border-l-4 border-gray-300 pl-4 italic my-3">{children}</blockquote>
-                          ),
-                          table: ({ children }: any) => (
-                            <div className="overflow-x-auto mb-3">
-                              <table className="min-w-full border-collapse border border-gray-300">
-                                {children}
-                              </table>
-                            </div>
-                          ),
-                          thead: ({ children }: any) => <thead className="bg-gray-100">{children}</thead>,
-                          tbody: ({ children }: any) => <tbody>{children}</tbody>,
-                          tr: ({ children }: any) => <tr className="border-b border-gray-200">{children}</tr>,
-                          th: ({ children }: any) => (
-                            <th className="border border-gray-300 px-3 py-2 text-left font-semibold">
-                              {children}
-                            </th>
-                          ),
-                          td: ({ children }: any) => (
-                            <td className="border border-gray-300 px-3 py-2">{children}</td>
-                          ),
-                          strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-                          em: ({ children }: any) => <em className="italic">{children}</em>,
-                          a: ({ href, children }: any) => (
-                            <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">
-                              {children}
-                            </a>
-                          ),
-                          hr: () => <hr className="my-4 border-gray-300" />,
-                        }}
-                      >
-                        {aiAnswer}
-                      </ReactMarkdown>
-                      {isAiLoading && (
-                        <span className="inline-block w-2 h-4 bg-blue-500 animate-pulse ml-1 align-middle" />
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    暂无 AI 回答
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (isSearchingEverything && results.length === 0 && query.trim()) ? (
-            // 骨架屏：搜索中时显示，模拟结果列表样式
-            <div
-              ref={listRef}
-              className="flex-1 min-h-0 results-list-scroll"
-              style={{ maxHeight: '500px' }}
-            >
-              {Array.from({ length: 8 }).map((_, index) => {
-                // 为每个骨架项生成固定的宽度，避免每次渲染都变化
-                const titleWidth = 60 + (index % 4) * 8;
-                const pathWidth = 40 + (index % 3) * 6;
-                return (
-                  <div
-                    key={`skeleton-${index}`}
-                    className="px-6 py-3"
-                  >
-                    <div className="flex items-center gap-3">
-                      {/* 序号骨架 */}
-                      <div className="text-sm font-medium flex-shrink-0 w-8 text-center text-gray-300">
-                        {index + 1}
-                      </div>
-                      {/* 图标骨架 */}
-                      <div className="w-8 h-8 rounded bg-gray-200 animate-pulse flex-shrink-0" />
-                      {/* 内容骨架 */}
-                      <div className="flex-1 min-w-0">
-                        <div 
-                          className="h-4 bg-gray-200 rounded animate-pulse mb-2" 
-                          style={{ width: `${titleWidth}%` }} 
-                        />
-                        <div 
-                          className="h-3 bg-gray-100 rounded animate-pulse" 
-                          style={{ width: `${pathWidth}%` }} 
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : results.length > 0 ? (
-            <ResultList
-              horizontalResults={horizontalResults}
-              verticalResults={verticalResults}
-              selectedHorizontalIndex={selectedHorizontalIndex}
-              selectedVerticalIndex={selectedVerticalIndex}
-              query={query}
-              resultStyle={resultStyle}
-              apps={apps}
-              filteredApps={filteredApps}
-              launchingAppPath={launchingAppPath}
-              pastedImagePath={pastedImagePath}
-              openHistory={openHistory}
-              urlRemarks={urlRemarks}
-              getPluginIcon={getPluginIcon}
-              onLaunch={handleLaunch}
-              onContextMenu={handleContextMenu}
-              onSaveImageToDownloads={handleSaveImageToDownloads}
-              horizontalScrollContainerRef={horizontalScrollContainerRef}
-              listRef={listRef}
-              isHorizontalResultsStable={isHorizontalResultsStable}
-            />
-          ) : null}
-
-          {/* Loading or Empty State */}
-          {!showAiAnswer && results.length === 0 && query && (
-            <div className="px-6 py-8 text-center text-gray-500 flex-1 flex items-center justify-center">
-              未找到匹配的应用或文件
-            </div>
-          )}
-
-          {/* Everything Search Status */}
-          {!showAiAnswer && query.trim() && isEverythingAvailable && (
-            <div className="px-6 py-2 border-t border-gray-200 bg-gray-50">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between text-xs text-gray-600">
-                  <div className="flex items-center gap-2">
-                    {isSearchingEverything ? (
-                      <>
-                        <div className="inline-block animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
-                        <span className="text-blue-600">Everything 搜索中...</span>
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-3 h-3 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                        </svg>
-                        <span>
-                          Everything: {everythingTotalCount !== null 
-                            ? `${everythingResults.length.toLocaleString()}/${everythingTotalCount.toLocaleString()}`
-                            : everythingResults.length > 0
-                            ? `${everythingResults.length.toLocaleString()}/?`
-                            : "无结果"}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                  {everythingVersion && (
-                    <div className="text-gray-500 text-xs">
-                      v{everythingVersion}
-                    </div>
-                  )}
-                </div>
-                
-                {/* 流式加载进度条 */}
-                {isSearchingEverything && everythingTotalCount !== null && everythingTotalCount > 0 && (
-                  <div className="flex flex-col gap-1">
-                    <div className="flex items-center justify-between text-xs text-gray-500">
-                      <span>
-                        已加载 {everythingCurrentCount.toLocaleString()} / {everythingTotalCount.toLocaleString()} 条
-                      </span>
-                      <span className="font-medium text-blue-600">
-                        {Math.round((everythingCurrentCount / everythingTotalCount) * 100)}%
-                      </span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="bg-blue-500 h-1.5 rounded-full transition-all duration-300 ease-out"
-                        style={{
-                          width: `${Math.min((everythingCurrentCount / everythingTotalCount) * 100, 100)}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {!showAiAnswer && results.length === 0 && !query && (
-            <div className="px-6 py-8 text-center text-gray-400 text-sm flex-1 flex items-center justify-center">
-              输入关键词搜索应用，或粘贴文件路径
-            </div>
-          )}
-          </div>
+          <SearchResultArea
+            showAiAnswer={showAiAnswer}
+            isAiLoading={isAiLoading}
+            aiAnswer={aiAnswer}
+            setAiAnswer={setAiAnswer}
+            setShowAiAnswer={setShowAiAnswer}
+            results={results}
+            query={query}
+            isSearchingEverything={isSearchingEverything}
+            isEverythingAvailable={isEverythingAvailable}
+            everythingTotalCount={everythingTotalCount}
+            everythingCurrentCount={everythingCurrentCount}
+            everythingVersion={everythingVersion}
+            everythingResults={everythingResults}
+            listRef={listRef}
+            horizontalResults={horizontalResults}
+            verticalResults={verticalResults}
+            selectedHorizontalIndex={selectedHorizontalIndex}
+            selectedVerticalIndex={selectedVerticalIndex}
+            resultStyle={resultStyle}
+            apps={apps}
+            filteredApps={filteredApps}
+            launchingAppPath={launchingAppPath}
+            pastedImagePath={pastedImagePath}
+            openHistory={openHistory}
+            urlRemarks={urlRemarks}
+            getPluginIcon={getPluginIcon}
+            handleLaunch={handleLaunch}
+            handleContextMenu={handleContextMenu}
+            handleSaveImageToDownloads={handleSaveImageToDownloads}
+            horizontalScrollContainerRef={horizontalScrollContainerRef}
+            isHorizontalResultsStable={isHorizontalResultsStable}
+          />
 
           {/* Footer */}
           <LauncherStatusBar
@@ -2427,55 +1863,18 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
       />
 
       {/* Remark Edit Modal */}
-      {isRemarkModalOpen && editingRemarkUrl && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setIsRemarkModalOpen(false)}>
-          <div className="bg-white rounded-lg shadow-xl p-4 max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-base font-semibold mb-3">修改备注</h2>
-            <div className="mb-3">
-              <div className="text-xs text-gray-600 mb-1">URL:</div>
-              <div className="text-xs text-gray-800 break-all mb-3">{editingRemarkUrl}</div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">备注:</label>
-              <textarea
-                value={remarkText}
-                onChange={(e) => setRemarkText(e.target.value)}
-                className="w-full px-2 py-1.5 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-sm"
-                rows={3}
-                placeholder="输入备注信息..."
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setIsRemarkModalOpen(false);
-                    setEditingRemarkUrl(null);
-                    setRemarkText("");
-                  } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    handleSaveRemark();
-                  }
-                }}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  setIsRemarkModalOpen(false);
-                  setEditingRemarkUrl(null);
-                  setRemarkText("");
-                }}
-                className="px-3 py-1.5 text-xs text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleSaveRemark}
-                className="px-3 py-1.5 text-xs text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
-              >
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RemarkEditModal
+        isOpen={isRemarkModalOpen}
+        editingRemarkUrl={editingRemarkUrl}
+        remarkText={remarkText}
+        setRemarkText={setRemarkText}
+        onClose={() => {
+          setIsRemarkModalOpen(false);
+          setEditingRemarkUrl(null);
+          setRemarkText("");
+        }}
+        onSave={handleSaveRemark}
+      />
 
       {/* Memo Detail Modal */}
       <MemoModal
@@ -2504,55 +1903,13 @@ export function LauncherWindow({ updateInfo }: LauncherWindowProps) {
 
 
       {/* 应用中心弹窗 */}
-      {isPluginListModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl flex flex-col m-4" style={{ maxHeight: '90vh', height: '80vh' }}>
-            {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 flex-shrink-0">
-              <h2 className="text-lg font-semibold text-gray-800">应用中心</h2>
-              <button
-                onClick={async () => {
-                  closePluginModalAndHide(setIsPluginListModalOpen, hideLauncherAndResetState);
-                }}
-                className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded transition-colors"
-              >
-                关闭
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 flex overflow-hidden min-h-0">
-              <AppCenterContent
-                onPluginClick={async (pluginId: string) => {
-                  const pluginContext: PluginContext = {
-                    query,
-                    setQuery,
-                    setSelectedIndex,
-                    hideLauncher: async () => {
-                      await tauriApi.hideLauncher();
-                    },
-                    setIsMemoModalOpen,
-                    setIsMemoListMode,
-                    setSelectedMemo,
-                    setMemoEditTitle,
-                    setMemoEditContent,
-                    setMemos,
-                    tauriApi,
-                  };
-                  await executePlugin(pluginId, pluginContext);
-                  setIsPluginListModalOpen(false);
-                  setTimeout(() => {
-                    hideLauncherAndResetState();
-                  }, 100);
-                }}
-                onClose={async () => {
-                  closePluginModalAndHide(setIsPluginListModalOpen, hideLauncherAndResetState);
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      <PluginListModal
+        isOpen={isPluginListModalOpen}
+        onClose={async () => {
+          closePluginModalAndHide(setIsPluginListModalOpen, hideLauncherAndResetState);
+        }}
+        onPluginClick={handlePluginClick}
+      />
 
       {/* 错误提示弹窗 */}
       <ErrorDialog
